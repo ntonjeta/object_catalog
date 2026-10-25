@@ -18,7 +18,7 @@ func TestFrontendIsServed(t *testing.T) {
 		t.Fatalf("index cache control = %q, want no-cache", cache)
 	}
 	html := string(data)
-	for _, fragment := range []string{`id="object-grid"`, `id="login-dialog"`, `id="busy-dialog"`, `id="object-photo"`, `/static/app.js`, `/static/styles.css`} {
+	for _, fragment := range []string{`id="object-grid"`, `id="login-dialog"`, `id="busy-dialog"`, `id="import-dialog"`, `id="import-file"`, `id="object-photo"`, `/static/app.js`, `/static/styles.css`} {
 		if !strings.Contains(html, fragment) {
 			t.Fatalf("index is missing %q", fragment)
 		}

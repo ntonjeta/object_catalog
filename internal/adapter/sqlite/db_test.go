@@ -3,10 +3,14 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
+
+	"biblio-oggetto/internal/domain"
 )
 
 func TestOpenMigratesExistingObjectsWithoutImagePath(t *testing.T) {
@@ -80,7 +84,10 @@ func TestOpenRenamesLegacyPhotoPath(t *testing.T) {
 	defer db.Close()
 
 	var imagePath string
-	if err := db.QueryRow(`SELECT image_path FROM objects WHERE id = 'legacy'`).Scan(&imagePath); err != nil {
+	var busy int
+	var busyUntil sql.NullString
+	if err := db.QueryRow(`SELECT image_path, busy, busy_until FROM objects WHERE id = 'legacy'`).
+		Scan(&imagePath, &busy, &busyUntil); err != nil {
 		t.Fatalf("query migrated image_path: %v", err)
 	}
 	if imagePath != "/static/uploads/old.png" {
@@ -91,5 +98,47 @@ func TestOpenRenamesLegacyPhotoPath(t *testing.T) {
 	}
 	if busyUntil.Valid {
 		t.Fatalf("busy_until = %q, want NULL default", busyUntil.String)
+	}
+}
+
+func TestObjectRepoByName(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := NewObjectRepo(db)
+
+	now := time.Now().UTC()
+	object := domain.Object{
+		ID:          "one",
+		Name:        "Dune",
+		Description: "desert",
+		Tags:        []string{"scifi"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := repo.Create(ctx, object); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	found, err := repo.ByName(ctx, "dune")
+	if err != nil {
+		t.Fatalf("ByName: %v", err)
+	}
+	if found.ID != object.ID || len(found.Tags) != 1 || found.Tags[0] != "scifi" {
+		t.Fatalf("found = %+v", found)
+	}
+	if _, err := repo.ByName(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing error = %v, want ErrNotFound", err)
+	}
+
+	second := object
+	second.ID = "two"
+	if err := repo.Create(ctx, second); err != nil {
+		t.Fatalf("create duplicate: %v", err)
+	}
+	if _, err := repo.ByName(ctx, "Dune"); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("duplicate error = %v, want ErrConflict", err)
 	}
 }

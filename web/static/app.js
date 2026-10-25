@@ -6,6 +6,7 @@
     userArea: document.getElementById("user-area"),
     userEmail: document.getElementById("user-email"),
     logoutButton: document.getElementById("logout-button"),
+    importButton: document.getElementById("import-button"),
     newObjectButton: document.getElementById("new-object-button"),
     searchInput: document.getElementById("search-input"),
     categoryFilter: document.getElementById("category-filter"),
@@ -42,13 +43,19 @@
     objectTags: document.getElementById("object-tags"),
     objectError: document.getElementById("object-error"),
     objectSave: document.getElementById("object-save"),
-    busyDialog: document.getElementById("busy-dialog"),
+busyDialog: document.getElementById("busy-dialog"),
     busyForm: document.getElementById("busy-form"),
     busyDialogTitle: document.getElementById("busy-dialog-title"),
     busyObjectId: document.getElementById("busy-object-id"),
     busyUntil: document.getElementById("busy-until"),
     busyError: document.getElementById("busy-error"),
     busySave: document.getElementById("busy-save"),
+    importDialog: document.getElementById("import-dialog"),
+    importForm: document.getElementById("import-form"),
+    importFile: document.getElementById("import-file"),
+    importResult: document.getElementById("import-result"),
+    importError: document.getElementById("import-error"),
+    importSave: document.getElementById("import-save"),
     categoryDialog: document.getElementById("category-dialog"),
     categoryForm: document.getElementById("category-form"),
     categoryDialogTitle: document.getElementById("category-dialog-title"),
@@ -188,6 +195,7 @@
     closeDialog(elements.objectDialog);
     closeDialog(elements.busyDialog);
     closeDialog(elements.categoryDialog);
+    closeDialog(elements.importDialog);
   }
 
   function applyAdminVisibility() {
@@ -557,6 +565,35 @@
     elements.objectName.focus();
   }
 
+  function openImport() {
+    elements.importForm.reset();
+    elements.importResult.replaceChildren();
+    elements.importResult.hidden = true;
+    hideFormError(elements.importError);
+    openDialog(elements.importDialog);
+    elements.importFile.focus();
+  }
+
+  function renderImportResult(result) {
+    elements.importResult.replaceChildren();
+    const noun = result.failed === 1 ? "failure" : "failures";
+    elements.importResult.append(
+      el(
+        "p",
+        "",
+        `Created ${result.created}, updated ${result.updated}, failed ${result.failed} ${noun}.`,
+      ),
+    );
+    if (result.failures.length > 0) {
+      const list = el("ul", "import-failures");
+      for (const failure of result.failures) {
+        list.append(el("li", "", `Row ${failure.row}: ${failure.message}`));
+      }
+      elements.importResult.append(list);
+    }
+    elements.importResult.hidden = false;
+  }
+
   function openEditObject(id) {
     const object = state.objects.find((item) => item.id === id);
     if (!object) {
@@ -732,8 +769,39 @@
       showStatus("Signed out.", "success");
     });
 
+    elements.importButton.addEventListener("click", openImport);
     elements.newObjectButton.addEventListener("click", openNewObject);
     elements.newCategoryButton.addEventListener("click", openNewCategory);
+
+    elements.importForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      hideFormError(elements.importError);
+      elements.importResult.replaceChildren();
+      elements.importResult.hidden = true;
+      const file = elements.importFile.files[0];
+      if (!file) {
+        showFormError(elements.importError, "Choose an .xlsx or CSV file.");
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      elements.importSave.disabled = true;
+      try {
+        const result = await api("/api/objects/import", {
+          method: "POST",
+          body: formData,
+        });
+        renderImportResult(result);
+        if (result.created > 0 || result.updated > 0) {
+          await loadCategories();
+          await loadObjects();
+        }
+      } catch (error) {
+        handleFormError(error, elements.importError, elements.importDialog);
+      } finally {
+        elements.importSave.disabled = false;
+      }
+    });
 
     elements.objectForm.addEventListener("submit", async (event) => {
       event.preventDefault();

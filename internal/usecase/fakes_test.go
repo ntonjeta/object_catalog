@@ -215,6 +215,25 @@ func (f *fakeObjects) ByID(_ context.Context, id string) (domain.Object, error) 
 	return object, nil
 }
 
+func (f *fakeObjects) ByName(_ context.Context, name string) (domain.Object, error) {
+	var match domain.Object
+	found := 0
+	for _, object := range f.objects {
+		if strings.EqualFold(object.Name, name) {
+			match = object
+			found++
+		}
+	}
+	switch found {
+	case 0:
+		return domain.Object{}, domain.ErrNotFound
+	case 1:
+		return match, nil
+	default:
+		return domain.Object{}, fmt.Errorf("%w: multiple objects named %q", domain.ErrConflict, name)
+	}
+}
+
 func (f *fakeObjects) List(_ context.Context, filter ObjectFilter) ([]domain.Object, int, error) {
 	f.lastFilter = filter
 	objects := make([]domain.Object, 0, len(f.objects))

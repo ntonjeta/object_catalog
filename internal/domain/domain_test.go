@@ -102,6 +102,19 @@ func TestObjectIsBusyAt(t *testing.T) {
 	}
 }
 
+func TestObjectPhotoPathValidation(t *testing.T) {
+	for _, value := range []string{"", "/static/uploads/photo.png", "https://example.com/photo.jpg", "http://example.com/photo.jpg"} {
+		if err := ValidateObjectPhotoPath(value); err != nil {
+			t.Errorf("ValidateObjectPhotoPath(%q) = %v, want nil", value, err)
+		}
+	}
+	for _, value := range []string{"//example.com/photo.jpg", "ftp://example.com/photo.jpg", "photo.jpg", "https://", "/static/photo name.jpg", strings.Repeat("a", 2049)} {
+		if err := ValidateObjectPhotoPath(value); !errors.Is(err, ErrInvalid) {
+			t.Errorf("ValidateObjectPhotoPath(%q) = %v, want ErrInvalid", value, err)
+		}
+	}
+}
+
 func TestNewID(t *testing.T) {
 	first, err := NewID()
 	if err != nil {

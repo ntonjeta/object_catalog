@@ -28,7 +28,7 @@ func (r *ObjectRepo) Create(ctx context.Context, object domain.Object) error {
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO objects (id, name, description, image_path, busy, busy_until, category_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		object.ID, object.Name, object.Description, object.PhotoPath,
+		object.ID, object.Name, object.Description, object.ImagePath,
 		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), categoryID(object.Category),
 		formatTime(object.CreatedAt), formatTime(object.UpdatedAt),
 	)
@@ -52,8 +52,9 @@ func (r *ObjectRepo) Update(ctx context.Context, object domain.Object) error {
 	defer tx.Rollback()
 
 	result, err := tx.ExecContext(ctx,
-		`UPDATE objects SET name = ?, description = ?, image_path = ?, category_id = ?, updated_at = ? WHERE id = ?`,
-		object.Name, object.Description, object.ImagePaphoto_pathth, categoryID(object.Category),
+		`UPDATE objects SET name = ?, description = ?, image_path = ?, busy = ?, busy_until = ?, category_id = ?, updated_at = ? WHERE id = ?`,
+		object.Name, object.Description, object.ImagePath,
+		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), categoryID(object.Category),
 		formatTime(object.UpdatedAt), object.ID,
 	)
 	if err != nil {
@@ -102,6 +103,49 @@ func (r *ObjectRepo) ByID(ctx context.Context, id string) (domain.Object, error)
 	}
 	object.Tags = tags
 	return object, nil
+}
+
+func (r *ObjectRepo) ByName(ctx context.Context, name string) (domain.Object, error) {
+	rows, err := r.db.QueryContext(ctx,
+		objectSelect+` WHERE o.name = ? COLLATE NOCASE ORDER BY o.created_at ASC, o.id ASC LIMIT 2`,
+		name,
+	)
+	if err != nil {
+		return domain.Object{}, mapError(err)
+	}
+	defer rows.Close()
+
+	var object domain.Object
+	found := 0
+	for rows.Next() {
+		scanned, err := scanObject(rows)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		if found == 0 {
+			object = scanned
+		}
+		found++
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Object{}, mapError(err)
+	}
+	if err := rows.Close(); err != nil {
+		return domain.Object{}, mapError(err)
+	}
+	switch found {
+	case 0:
+		return domain.Object{}, domain.ErrNotFound
+	case 1:
+		tags, err := r.tags(ctx, object.ID)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		object.Tags = tags
+		return object, nil
+	default:
+		return domain.Object{}, fmt.Errorf("%w: multiple objects named %q", domain.ErrConflict, name)
+	}
 }
 
 func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]domain.Object, int, error) {
@@ -236,12 +280,21 @@ func scanObject(row scanner) (domain.Object, error) {
 		categoryUpdatedAt    sql.NullString
 	)
 	if err := row.Scan(
-		&object.ID, &object.Name, &object.Description, &object.ImagePath, &createdAt, &updatedAt,
+		&object.ID, &object.Name, &object.Description, &object.ImagePath, &busy, &busyUntil,
+		&createdAt, &updatedAt,
 		&categoryID, &categoryName, &categoryCreatedAt, &categoryUpdatedAt,
 	); err != nil {
 		return domain.Object{}, mapError(err)
 	}
+	object.Busy = busy != 0
 	var err error
+	if busyUntil.Valid {
+		until, err := parseTime(busyUntil.String)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		object.BusyUntil = &until
+	}
 	if object.CreatedAt, err = parseTime(createdAt); err != nil {
 		return domain.Object{}, err
 	}

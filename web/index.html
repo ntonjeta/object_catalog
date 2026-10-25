@@ -32,7 +32,10 @@
         <h1>Browse the collection</h1>
         <p class="hero-copy">Search objects by name, description, category, or tag. Sign in as admin to manage the catalog.</p>
       </div>
-      <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>New object</button>
+      <div class="hero-actions">
+        <button id="import-button" class="button button-ghost" type="button" data-admin-only hidden>Import</button>
+        <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>New object</button>
+      </div>
     </section>
 
     <section class="toolbar" aria-label="Search and filters">
@@ -164,6 +167,30 @@
       <div class="dialog-actions">
         <button class="button button-ghost" type="button" data-close-dialog="busy-dialog">Cancel</button>
         <button id="busy-save" class="button button-primary" type="submit">Mark busy</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="import-dialog" class="dialog" aria-labelledby="import-dialog-title">
+    <form id="import-form" class="dialog-form">
+      <div>
+        <h2 id="import-dialog-title">Import objects</h2>
+        <p class="muted">
+          Upload an .xlsx or CSV file. Required column: <strong>name</strong>. Optional columns:
+          <strong>description</strong>, <strong>category</strong>, <strong>tags</strong>, and
+          <strong>photo_url</strong>.
+        </p>
+      </div>
+      <label class="field">
+        <span>File</span>
+        <input id="import-file" name="file" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+        <small class="field-hint">Tags are comma-separated. Missing categories are created automatically. Existing names are updated.</small>
+      </label>
+      <div id="import-result" class="import-result" role="status" aria-live="polite" hidden></div>
+      <p id="import-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-ghost" type="button" data-close-dialog="import-dialog">Close</button>
+        <button id="import-save" class="button button-primary" type="submit">Import</button>
       </div>
     </form>
   </dialog>

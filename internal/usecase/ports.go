@@ -44,5 +44,6 @@ type ObjectRepository interface {
 	Update(ctx context.Context, object domain.Object) error
 	Delete(ctx context.Context, id string) error
 	ByID(ctx context.Context, id string) (domain.Object, error)
+	ByName(ctx context.Context, name string) (domain.Object, error)
 	List(ctx context.Context, filter ObjectFilter) ([]domain.Object, int, error)
 }

@@ -166,6 +166,13 @@ h3 {
   color: var(--text-muted);
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .toolbar {
   display: grid;
   grid-template-columns: minmax(220px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
@@ -606,6 +613,28 @@ input[type="file"] {
   gap: 8px;
   margin: 4px 0 0;
   padding: 0;
+}
+
+.import-result {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  padding: 12px;
+  font-size: 14px;
+}
+
+.import-failures {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding-left: 20px;
+  color: var(--danger);
+}
+
+.import-failures li {
+  margin-bottom: 4px;
 }
 
 .form-error {

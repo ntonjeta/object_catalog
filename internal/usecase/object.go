@@ -30,6 +30,7 @@ type CreateObjectInput struct {
 	CategoryID  string
 	Tags        []string
 	Photo       *PhotoUpload
+	PhotoPath   string
 }
 
 type UpdateObjectInput struct {
@@ -38,6 +39,7 @@ type UpdateObjectInput struct {
 	CategoryID  *string
 	Tags        *[]string
 	Photo       *PhotoUpload
+	PhotoPath   *string
 	RemovePhoto bool
 }
 
@@ -67,17 +69,34 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 	if err != nil {
 		return domain.Object{}, err
 	}
+	imageFile := strings.TrimSpace(input.PhotoPath)
+	if err := domain.ValidateObjectPhotoPath(imageFile); err != nil {
+		return domain.Object{}, err
+	}
+	uploadedPhoto := false
+	if input.Photo != nil {
+		if imageFile != "" {
+			return domain.Object{}, fmt.Errorf("%w: cannot upload and set a photo path at the same time", domain.ErrInvalid)
+		}
+		imageFile, err = uc.savePhoto(ctx, input.Photo)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		uploadedPhoto = true
+	}
 	category, err := uc.category(ctx, input.CategoryID)
 	if err != nil {
+		if uploadedPhoto {
+			uc.deletePhoto(ctx, imageFile)
+		}
 		return domain.Object{}, err
 	}
 	id, err := domain.NewID()
 	if err != nil {
+		if uploadedPhoto {
+			uc.deletePhoto(ctx, imageFile)
+		}
 		return domain.Object{}, fmt.Errorf("generate object id: %w", err)
-	}
-	imageFile, err := uc.savePhoto(ctx, input.Photo)
-	if err != nil {
-		return domain.Object{}, err
 	}
 	now := time.Now().UTC()
 	object := domain.Object{
@@ -91,7 +110,9 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 		UpdatedAt:   now,
 	}
 	if err := uc.objects.Create(ctx, object); err != nil {
-		uc.deletePhoto(ctx, imageFile)
+		if uploadedPhoto {
+			uc.deletePhoto(ctx, imageFile)
+		}
 		return domain.Object{}, err
 	}
 	return object, nil
@@ -100,6 +121,12 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInput) (domain.Object, error) {
 	if input.Photo != nil && input.RemovePhoto {
 		return domain.Object{}, fmt.Errorf("%w: cannot replace and remove the photo at the same time", domain.ErrInvalid)
+	}
+	if input.Photo != nil && input.PhotoPath != nil {
+		return domain.Object{}, fmt.Errorf("%w: cannot upload and set a photo path at the same time", domain.ErrInvalid)
+	}
+	if input.RemovePhoto && input.PhotoPath != nil {
+		return domain.Object{}, fmt.Errorf("%w: cannot remove and set a photo path at the same time", domain.ErrInvalid)
 	}
 	object, err := uc.objects.ByID(ctx, id)
 	if err != nil {
@@ -133,6 +160,13 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 			return domain.Object{}, err
 		}
 		object.Category = category
+	}
+	if input.PhotoPath != nil {
+		imageFile := strings.TrimSpace(*input.PhotoPath)
+		if err := domain.ValidateObjectPhotoPath(imageFile); err != nil {
+			return domain.Object{}, err
+		}
+		object.ImagePath = imageFile
 	}
 	newImagePath, err := uc.savePhoto(ctx, input.Photo)
 	if err != nil {

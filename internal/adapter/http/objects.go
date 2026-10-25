@@ -38,6 +38,8 @@ type objectResponse struct {
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	ImagePath   string            `json:"image_path"`
+	Busy        bool              `json:"busy"`
+	BusyUntil   *time.Time        `json:"busy_until"`
 	Category    *categoryResponse `json:"category"`
 	Tags        []string          `json:"tags"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -194,6 +196,8 @@ func toObjectResponse(object domain.Object) objectResponse {
 		Name:        object.Name,
 		Description: object.Description,
 		ImagePath:   imageURL(object.ImagePath),
+		Busy:        object.Busy,
+		BusyUntil:   object.BusyUntil,
 		Tags:        object.Tags,
 		CreatedAt:   object.CreatedAt,
 		UpdatedAt:   object.UpdatedAt,
@@ -212,7 +216,11 @@ func imageURL(fileName string) string {
 	if fileName == "" {
 		return ""
 	}
-	return imageURLPrefix + strings.TrimPrefix(fileName, imageURLPrefix)
+	// Imported objects can carry an absolute URL or a root-relative public path.
+	if strings.HasPrefix(fileName, "/") || strings.HasPrefix(fileName, "http://") || strings.HasPrefix(fileName, "https://") {
+		return fileName
+	}
+	return imageURLPrefix + fileName
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {

@@ -45,16 +45,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate database: %w", err)
 		}
 	}
-	return ensureObjectImageColumn(ctx, db)
+	return ensureObjectColumns(ctx, db)
 }
 
-func ensureObjectImageColumn(ctx context.Context, db *sql.DB) error {
+func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(objects)`)
 	if err != nil {
 		return fmt.Errorf("inspect objects table: %w", err)
 	}
-	hasImage := false
-	hasLegacyPhoto := false
+	found := make(map[string]bool)
 	for rows.Next() {
 		var (
 			position     int
@@ -68,12 +67,7 @@ func ensureObjectImageColumn(ctx context.Context, db *sql.DB) error {
 			rows.Close()
 			return fmt.Errorf("inspect objects column: %w", err)
 		}
-		switch name {
-		case "image_path":
-			hasImage = true
-		case "photo_path":
-			hasLegacyPhoto = true
-		}
+		found[name] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -83,11 +77,19 @@ func ensureObjectImageColumn(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("inspect objects table: %w", err)
 	}
 
+	// Older databases stored the public photo path in photo_path.
+	if found["photo_path"] && !found["image_path"] {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE objects RENAME COLUMN photo_path TO image_path`); err != nil {
+			return fmt.Errorf("rename objects photo_path: %w", err)
+		}
+		found["image_path"] = true
+	}
+
 	for _, column := range []struct {
 		name       string
 		definition string
 	}{
-		{"photo_path", `photo_path TEXT NOT NULL DEFAULT ''`},
+		{"image_path", `image_path TEXT NOT NULL DEFAULT ''`},
 		{"busy", `busy INTEGER NOT NULL DEFAULT 0`},
 		{"busy_until", `busy_until TEXT`},
 	} {

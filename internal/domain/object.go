@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -10,6 +11,7 @@ import (
 const (
 	maxObjectNameLength        = 200
 	maxObjectDescriptionLength = 5000
+	maxObjectPhotoPathLength   = 2048
 	maxTags                    = 20
 	maxTagLength               = 50
 )
@@ -19,6 +21,8 @@ type Object struct {
 	Name        string
 	Description string
 	ImagePath   string
+	Busy        bool
+	BusyUntil   *time.Time
 	Category    *Category
 	Tags        []string
 	CreatedAt   time.Time
@@ -51,6 +55,31 @@ func ValidateObjectName(name string) error {
 func ValidateObjectDescription(description string) error {
 	if utf8.RuneCountInString(description) > maxObjectDescriptionLength {
 		return fmt.Errorf("%w: description must be at most %d characters", ErrInvalid, maxObjectDescriptionLength)
+	}
+	return nil
+}
+
+// ValidateObjectPhotoPath accepts an empty path, an absolute HTTP(S) URL, or a
+// root-relative public path such as /static/uploads/photo.png.
+func ValidateObjectPhotoPath(photoPath string) error {
+	if photoPath == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(photoPath) > maxObjectPhotoPathLength {
+		return fmt.Errorf("%w: photo path must be at most %d characters", ErrInvalid, maxObjectPhotoPathLength)
+	}
+	if strings.ContainsAny(photoPath, " \t\r\n") {
+		return fmt.Errorf("%w: photo path must not contain whitespace", ErrInvalid)
+	}
+	if strings.HasPrefix(photoPath, "/") {
+		if strings.HasPrefix(photoPath, "//") {
+			return fmt.Errorf("%w: photo path must not be protocol-relative", ErrInvalid)
+		}
+		return nil
+	}
+	parsed, err := url.Parse(photoPath)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("%w: photo path must be an http(s) URL or start with /", ErrInvalid)
 	}
 	return nil
 }

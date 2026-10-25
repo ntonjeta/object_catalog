@@ -49,7 +49,7 @@ type objectDTO struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
 	Description string       `json:"description"`
-	PhotoPath   string       `json:"photo_path"`
+	ImagePath   string       `json:"image_path"`
 	Busy        bool         `json:"busy"`
 	BusyUntil   *time.Time   `json:"busy_until"`
 	Category    *categoryDTO `json:"category"`
