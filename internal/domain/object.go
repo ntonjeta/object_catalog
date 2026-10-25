@@ -1,0 +1,71 @@
+package domain
+
+import (
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	maxObjectNameLength        = 200
+	maxObjectDescriptionLength = 5000
+	maxTags                    = 20
+	maxTagLength               = 50
+)
+
+type Object struct {
+	ID          string
+	Name        string
+	Description string
+	PhotoPath   string
+	Category    *Category
+	Tags        []string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func NormalizeObjectName(name string) string {
+	return strings.Join(strings.Fields(name), " ")
+}
+
+func ValidateObjectName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: object name is required", ErrInvalid)
+	}
+	if utf8.RuneCountInString(name) > maxObjectNameLength {
+		return fmt.Errorf("%w: object name must be at most %d characters", ErrInvalid, maxObjectNameLength)
+	}
+	return nil
+}
+
+func ValidateObjectDescription(description string) error {
+	if utf8.RuneCountInString(description) > maxObjectDescriptionLength {
+		return fmt.Errorf("%w: description must be at most %d characters", ErrInvalid, maxObjectDescriptionLength)
+	}
+	return nil
+}
+
+// NormalizeTags trims, lowercases, and deduplicates tags while preserving order.
+func NormalizeTags(tags []string) ([]string, error) {
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.ToLower(strings.TrimSpace(tag))
+		if tag == "" {
+			continue
+		}
+		if utf8.RuneCountInString(tag) > maxTagLength {
+			return nil, fmt.Errorf("%w: tag must be at most %d characters", ErrInvalid, maxTagLength)
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	if len(normalized) > maxTags {
+		return nil, fmt.Errorf("%w: at most %d tags are allowed", ErrInvalid, maxTags)
+	}
+	return normalized, nil
+}

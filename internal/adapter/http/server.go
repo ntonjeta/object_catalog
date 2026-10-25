@@ -1,0 +1,74 @@
+package httpapi
+
+import (
+	"log"
+	"net/http"
+
+	"biblio-oggetto/internal/usecase"
+)
+
+type Config struct {
+	CookieSecure bool
+	UploadDir    string
+}
+
+type Server struct {
+	auth         *usecase.Auth
+	objects      *usecase.Objects
+	categories   *usecase.Categories
+	cookieSecure bool
+	uploadDir    string
+}
+
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, cfg Config) *Server {
+	return &Server{
+		auth:         auth,
+		objects:      objects,
+		categories:   categories,
+		cookieSecure: cfg.CookieSecure,
+		uploadDir:    cfg.UploadDir,
+	}
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /api/auth/login", s.login)
+	mux.HandleFunc("POST /api/auth/logout", s.requireAuth(s.logout))
+	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.me))
+	mux.HandleFunc("PUT /api/account/password", s.requireAuth(s.changePassword))
+	mux.HandleFunc("DELETE /api/account", s.requireAuth(s.deleteAccount))
+
+	mux.HandleFunc("GET /api/categories", s.listCategories)
+	mux.HandleFunc("GET /api/categories/{id}", s.getCategory)
+	mux.HandleFunc("POST /api/categories", s.requireAuth(s.createCategory))
+	mux.HandleFunc("PATCH /api/categories/{id}", s.requireAuth(s.updateCategory))
+	mux.HandleFunc("DELETE /api/categories/{id}", s.requireAuth(s.deleteCategory))
+
+	mux.HandleFunc("GET /api/objects", s.listObjects)
+	mux.HandleFunc("GET /api/objects/{id}", s.getObject)
+	mux.HandleFunc("POST /api/objects", s.requireAuth(s.createObject))
+	mux.HandleFunc("PATCH /api/objects/{id}", s.requireAuth(s.updateObject))
+	mux.HandleFunc("DELETE /api/objects/{id}", s.requireAuth(s.deleteObject))
+
+	s.registerStatic(mux)
+	mux.HandleFunc("/", s.notFound)
+
+	return s.recoverPanics(mux)
+}
+
+func (s *Server) recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("panic serving %s %s: %v", r.Method, r.URL.Path, recovered)
+				writeError(w, errInternal)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	writeError(w, errNotFoundRoute)
+}

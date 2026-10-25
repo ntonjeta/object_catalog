@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Object Catalog</title>
+  <meta name="description" content="Browse and manage the object catalog.">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/" aria-label="Object Catalog home">
+        <span class="brand-mark" aria-hidden="true">OC</span>
+        <span>Object Catalog</span>
+      </a>
+      <div class="auth-area">
+        <button id="login-button" class="button button-primary" type="button">Admin login</button>
+        <div id="user-area" class="user-area" hidden>
+          <span id="user-email" class="user-email"></span>
+          <button id="logout-button" class="button button-ghost" type="button">Log out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Public catalog</p>
+        <h1>Browse the collection</h1>
+        <p class="hero-copy">Search objects by name, description, category, or tag. Sign in as admin to manage the catalog.</p>
+      </div>
+      <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>New object</button>
+    </section>
+
+    <section class="toolbar" aria-label="Search and filters">
+      <label class="field search-field">
+        <span>Search</span>
+        <input id="search-input" type="search" autocomplete="off" placeholder="Name, description, category, tag">
+      </label>
+      <label class="field">
+        <span>Category</span>
+        <select id="category-filter">
+          <option value="">All categories</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Tag</span>
+        <input id="tag-filter" type="search" autocomplete="off" placeholder="e.g. scifi">
+      </label>
+      <button id="clear-filters" class="button button-ghost toolbar-clear" type="button">Clear</button>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+
+    <section class="catalog" aria-live="polite" aria-busy="false" id="catalog-section">
+      <div id="loading" class="loading" hidden>Loading objects...</div>
+      <div id="empty-state" class="empty" hidden>
+        <h2>No objects found</h2>
+        <p id="empty-message">Try clearing the filters or create the first object.</p>
+      </div>
+      <div id="object-grid" class="object-grid"></div>
+      <nav id="pagination" class="pagination" aria-label="Catalog pages" hidden>
+        <button id="prev-page" class="button button-ghost" type="button">Previous</button>
+        <span id="page-info" class="page-info"></span>
+        <button id="next-page" class="button button-ghost" type="button">Next</button>
+      </nav>
+    </section>
+
+    <section class="categories-panel" aria-labelledby="categories-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="categories-heading">Categories</h2>
+          <p class="muted">Filter the catalog by category.</p>
+        </div>
+        <button id="new-category-button" class="button" type="button" data-admin-only hidden>Add category</button>
+      </div>
+      <div id="category-list" class="category-list"></div>
+    </section>
+  </main>
+
+  <dialog id="login-dialog" class="dialog" aria-labelledby="login-title">
+    <form id="login-form" class="dialog-form">
+      <div>
+        <h2 id="login-title">Admin login</h2>
+        <p class="muted">Use the administrator account created with the create-admin command.</p>
+      </div>
+      <label class="field">
+        <span>Email</span>
+        <input id="login-email" name="email" type="email" autocomplete="username" required>
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-ghost" type="button" data-close-dialog="login-dialog">Cancel</button>
+        <button class="button button-primary" type="submit">Log in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="object-dialog" class="dialog" aria-labelledby="object-dialog-title">
+    <form id="object-form" class="dialog-form">
+      <div>
+        <h2 id="object-dialog-title">New object</h2>
+        <p class="muted">Name is required. Tags are comma-separated.</p>
+      </div>
+      <input id="object-id" type="hidden">
+      <label class="field">
+        <span>Name</span>
+        <input id="object-name" name="name" type="text" maxlength="200" required>
+      </label>
+      <label class="field">
+        <span>Description</span>
+        <textarea id="object-description" name="description" rows="4" maxlength="5000"></textarea>
+      </label>
+      <label class="field">
+        <span>Category</span>
+        <select id="object-category" name="category">
+          <option value="">No category</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Photo</span>
+        <input id="object-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
+        <small class="field-hint">JPEG, PNG, or WebP, up to 5 MB.</small>
+      </label>
+      <div id="object-photo-preview-wrap" class="photo-preview-wrap" hidden>
+        <img id="object-photo-preview" class="photo-preview" alt="Photo preview">
+        <label class="checkbox">
+          <input id="object-remove-photo" type="checkbox">
+          <span>Remove photo</span>
+        </label>
+      </div>
+      <label class="field">
+        <span>Tags</span>
+        <input id="object-tags" name="tags" type="text" placeholder="scifi, classic, sequel">
+        <small class="field-hint">Comma-separated; up to 20 tags.</small>
+      </label>
+      <p id="object-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-ghost" type="button" data-close-dialog="object-dialog">Cancel</button>
+        <button id="object-save" class="button button-primary" type="submit">Save object</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="category-dialog" class="dialog" aria-labelledby="category-dialog-title">
+    <form id="category-form" class="dialog-form">
+      <div>
+        <h2 id="category-dialog-title">New category</h2>
+        <p class="muted">Category names are unique.</p>
+      </div>
+      <input id="category-id" type="hidden">
+      <label class="field">
+        <span>Name</span>
+        <input id="category-name" name="name" type="text" maxlength="100" required>
+      </label>
+      <p id="category-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-ghost" type="button" data-close-dialog="category-dialog">Cancel</button>
+        <button id="category-save" class="button button-primary" type="submit">Save category</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

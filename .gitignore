@@ -1,0 +1,38 @@
+# Runtime data
+/catalog.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+/static/uploads/
+
+# Uploaded/local media
+*.tmp
+
+# Go build and test artifacts
+/server
+/bin/
+*.test
+*.out
+coverage.out
+coverage.html
+*.coverprofile
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Editor and OS files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+worktree/
