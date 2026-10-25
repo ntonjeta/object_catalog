@@ -42,6 +42,13 @@
     objectTags: document.getElementById("object-tags"),
     objectError: document.getElementById("object-error"),
     objectSave: document.getElementById("object-save"),
+    busyDialog: document.getElementById("busy-dialog"),
+    busyForm: document.getElementById("busy-form"),
+    busyDialogTitle: document.getElementById("busy-dialog-title"),
+    busyObjectId: document.getElementById("busy-object-id"),
+    busyUntil: document.getElementById("busy-until"),
+    busyError: document.getElementById("busy-error"),
+    busySave: document.getElementById("busy-save"),
     categoryDialog: document.getElementById("category-dialog"),
     categoryForm: document.getElementById("category-form"),
     categoryDialogTitle: document.getElementById("category-dialog-title"),
@@ -61,6 +68,7 @@
     filters: { q: "", category: "", tag: "" },
     requestId: 0,
     editingObjectId: null,
+    editingBusyId: null,
     editingCategoryId: null,
   };
 
@@ -178,6 +186,7 @@
   function closeAllDialogs() {
     closeDialog(elements.loginDialog);
     closeDialog(elements.objectDialog);
+    closeDialog(elements.busyDialog);
     closeDialog(elements.categoryDialog);
   }
 
@@ -210,6 +219,11 @@
       month: "short",
       day: "numeric",
     });
+  }
+
+  function toDateTimeLocal(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
   function parseTags(value) {
@@ -346,6 +360,12 @@
       if (object.category) {
         top.append(el("span", "category-badge", object.category.name));
       }
+      if (object.busy) {
+        const label = object.busy_until
+          ? `Unavailable until ${formatDate(object.busy_until)}`
+          : "Unavailable";
+        top.append(el("span", "busy-badge", label));
+      }
 
       const description = el(
         "p",
@@ -385,12 +405,24 @@
       editButton.dataset.action = "edit-object";
       editButton.dataset.id = object.id;
       editButton.setAttribute("aria-label", `Edit ${object.name}`);
+      const busyButton = el(
+        "button",
+        "button button-ghost button-small",
+        object.busy ? "Release" : "Mark busy",
+      );
+      busyButton.type = "button";
+      busyButton.dataset.action = object.busy ? "release-object" : "busy-object";
+      busyButton.dataset.id = object.id;
+      busyButton.setAttribute(
+        "aria-label",
+        object.busy ? `Release ${object.name}` : `Mark ${object.name} busy`,
+      );
       const deleteButton = el("button", "button button-danger button-small", "Delete");
       deleteButton.type = "button";
       deleteButton.dataset.action = "delete-object";
       deleteButton.dataset.id = object.id;
       deleteButton.setAttribute("aria-label", `Delete ${object.name}`);
-      actions.append(editButton, deleteButton);
+      actions.append(editButton, busyButton, deleteButton);
       footer.append(actions);
 
       card.append(footer);
@@ -546,6 +578,44 @@
     hideFormError(elements.objectError);
     openDialog(elements.objectDialog);
     elements.objectName.focus();
+  }
+
+  function openBusyObject(id) {
+    const object = state.objects.find((item) => item.id === id);
+    if (!object) {
+      return;
+    }
+    state.editingBusyId = id;
+    elements.busyForm.reset();
+    elements.busyObjectId.value = object.id;
+    elements.busyDialogTitle.textContent = `Mark "${object.name}" busy`;
+    const minimum = new Date(Date.now() + 60 * 1000);
+    const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    elements.busyUntil.min = toDateTimeLocal(minimum);
+    elements.busyUntil.value = toDateTimeLocal(suggested);
+    hideFormError(elements.busyError);
+    openDialog(elements.busyDialog);
+    elements.busyUntil.focus();
+  }
+
+  async function releaseObject(id) {
+    const object = state.objects.find((item) => item.id === id);
+    if (!object) {
+      return;
+    }
+    if (!window.confirm(`Release "${object.name}"?`)) {
+      return;
+    }
+    try {
+      await api(`/api/objects/${encodeURIComponent(id)}/busy`, {
+        method: "PATCH",
+        body: { busy: false },
+      });
+      showStatus("Object released.", "success");
+      await loadObjects();
+    } catch (error) {
+      handleActionError(error);
+    }
   }
 
   function openNewCategory() {
@@ -706,6 +776,33 @@
       }
     });
 
+    elements.busyForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      hideFormError(elements.busyError);
+      const value = elements.busyUntil.value;
+      const until = new Date(value);
+      if (!value || Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
+        showFormError(elements.busyError, "Choose a time in the future.");
+        elements.busyUntil.focus();
+        return;
+      }
+      elements.busySave.disabled = true;
+      try {
+        await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/busy`, {
+          method: "PATCH",
+          body: { busy: true, busy_until: until.toISOString() },
+        });
+        showStatus("Object marked busy.", "success");
+        closeDialog(elements.busyDialog);
+        state.editingBusyId = null;
+        await loadObjects();
+      } catch (error) {
+        handleFormError(error, elements.busyError, elements.busyDialog);
+      } finally {
+        elements.busySave.disabled = false;
+      }
+    });
+
     elements.categoryForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       hideFormError(elements.categoryError);
@@ -839,6 +936,10 @@
       }
       if (button.dataset.action === "edit-object") {
         openEditObject(button.dataset.id);
+      } else if (button.dataset.action === "busy-object") {
+        openBusyObject(button.dataset.id);
+      } else if (button.dataset.action === "release-object") {
+        releaseObject(button.dataset.id);
       } else if (button.dataset.action === "delete-object") {
         deleteObject(button.dataset.id);
       }

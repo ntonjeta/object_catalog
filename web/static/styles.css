@@ -413,6 +413,7 @@ input[type="file"] {
 
 .card-top {
   display: flex;
+  flex-wrap: wrap;
   align-items: start;
   justify-content: space-between;
   gap: 12px;
@@ -429,6 +430,17 @@ input[type="file"] {
   font-size: 12px;
   font-weight: 750;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.busy-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fff1e6;
+  color: #9a4b09;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 750;
   white-space: nowrap;
 }
 
@@ -478,6 +490,8 @@ input[type="file"] {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 2px;
 }
 

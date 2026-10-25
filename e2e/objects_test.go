@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestObjectCRUDAndSearch(t *testing.T) {
@@ -160,6 +161,74 @@ func TestObjectUpdateDeleteAndCategoryDetach(t *testing.T) {
 	assertStatus(t, response, http.StatusOK, data)
 	if detached := decode[objectEnvelope](t, data).Object; detached.Category != nil {
 		t.Fatalf("category = %+v, want nil after category deletion", detached.Category)
+	}
+}
+
+func TestObjectBusyState(t *testing.T) {
+	environment := newEnv(t)
+	environment.login()
+	object := environment.createObject(map[string]any{"name": "Dune"})
+	path := "/api/objects/" + object.ID + "/busy"
+	until := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+
+	response, data := environment.do(environment.anonymous, http.MethodPatch, path, map[string]any{
+		"busy":       true,
+		"busy_until": until,
+	})
+	assertStatus(t, response, http.StatusUnauthorized, data)
+
+	response, data = environment.do(environment.admin, http.MethodPatch, path, map[string]any{
+		"busy":       true,
+		"busy_until": until,
+	})
+	assertStatus(t, response, http.StatusOK, data)
+	busy := decode[objectEnvelope](t, data).Object
+	if !busy.Busy || busy.BusyUntil == nil || !busy.BusyUntil.Equal(until) {
+		t.Fatalf("busy object = %+v, want busy until %v", busy, until)
+	}
+
+	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/objects/"+object.ID, nil)
+	assertStatus(t, response, http.StatusOK, data)
+	public := decode[objectEnvelope](t, data).Object
+	if !public.Busy || public.BusyUntil == nil {
+		t.Fatalf("public object = %+v, want busy", public)
+	}
+
+	for _, body := range []map[string]any{
+		{"busy": true},
+		{"busy": true, "busy_until": time.Now().UTC().Add(-time.Hour)},
+	} {
+		response, data = environment.do(environment.admin, http.MethodPatch, path, body)
+		assertStatus(t, response, http.StatusBadRequest, data)
+		assertErrorCode(t, data, "invalid_input")
+	}
+
+	response, data = environment.do(environment.admin, http.MethodPatch, "/api/objects/missing/busy", map[string]any{
+		"busy": false,
+	})
+	assertStatus(t, response, http.StatusNotFound, data)
+
+	response, data = environment.do(environment.admin, http.MethodPatch, path, map[string]any{
+		"busy": false,
+	})
+	assertStatus(t, response, http.StatusOK, data)
+	released := decode[objectEnvelope](t, data).Object
+	if released.Busy || released.BusyUntil != nil {
+		t.Fatalf("released object = %+v, want available", released)
+	}
+
+	past := time.Now().UTC().Add(-time.Hour)
+	if _, err := environment.app.DB.Exec(
+		`UPDATE objects SET busy = 1, busy_until = ? WHERE id = ?`,
+		past.Format(time.RFC3339Nano), object.ID,
+	); err != nil {
+		t.Fatalf("set expired busy: %v", err)
+	}
+	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/objects/"+object.ID, nil)
+	assertStatus(t, response, http.StatusOK, data)
+	expired := decode[objectEnvelope](t, data).Object
+	if expired.Busy || expired.BusyUntil != nil {
+		t.Fatalf("expired object = %+v, want available", expired)
 	}
 }
 

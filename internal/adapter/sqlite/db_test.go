@@ -39,11 +39,21 @@ func TestOpenMigratesExistingObjectsWithoutPhotoPath(t *testing.T) {
 	}
 	defer db.Close()
 
-	var photoPath string
-	if err := db.QueryRow(`SELECT photo_path FROM objects WHERE id = 'legacy'`).Scan(&photoPath); err != nil {
-		t.Fatalf("query migrated photo_path: %v", err)
+	var (
+		photoPath string
+		busy      int
+		busyUntil sql.NullString
+	)
+	if err := db.QueryRow(`SELECT photo_path, busy, busy_until FROM objects WHERE id = 'legacy'`).Scan(&photoPath, &busy, &busyUntil); err != nil {
+		t.Fatalf("query migrated object: %v", err)
 	}
 	if photoPath != "" {
 		t.Fatalf("photo_path = %q, want empty default", photoPath)
+	}
+	if busy != 0 {
+		t.Fatalf("busy = %d, want 0 default", busy)
+	}
+	if busyUntil.Valid {
+		t.Fatalf("busy_until = %q, want NULL default", busyUntil.String)
 	}
 }

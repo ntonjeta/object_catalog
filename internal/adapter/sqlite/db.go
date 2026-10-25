@@ -45,15 +45,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate database: %w", err)
 		}
 	}
-	return ensureObjectPhotoColumn(ctx, db)
+	return ensureObjectColumns(ctx, db)
 }
 
-func ensureObjectPhotoColumn(ctx context.Context, db *sql.DB) error {
+func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(objects)`)
 	if err != nil {
 		return fmt.Errorf("inspect objects table: %w", err)
 	}
-	found := false
+	found := make(map[string]bool)
 	for rows.Next() {
 		var (
 			position     int
@@ -67,9 +67,7 @@ func ensureObjectPhotoColumn(ctx context.Context, db *sql.DB) error {
 			rows.Close()
 			return fmt.Errorf("inspect objects column: %w", err)
 		}
-		if name == "photo_path" {
-			found = true
-		}
+		found[name] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -78,11 +76,21 @@ func ensureObjectPhotoColumn(ctx context.Context, db *sql.DB) error {
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("inspect objects table: %w", err)
 	}
-	if found {
-		return nil
-	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE objects ADD COLUMN photo_path TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("add objects photo_path: %w", err)
+
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{"photo_path", `photo_path TEXT NOT NULL DEFAULT ''`},
+		{"busy", `busy INTEGER NOT NULL DEFAULT 0`},
+		{"busy_until", `busy_until TEXT`},
+	} {
+		if found[column.name] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE objects ADD COLUMN `+column.definition); err != nil {
+			return fmt.Errorf("add objects %s: %w", column.name, err)
+		}
 	}
 	return nil
 }

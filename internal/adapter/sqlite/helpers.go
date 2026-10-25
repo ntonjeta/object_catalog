@@ -31,6 +31,20 @@ func parseOptionalTime(value string) (time.Time, error) {
 	return parseTime(value)
 }
 
+func formatOptionalTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return formatTime(*value)
+}
+
+func busyValue(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func likePattern(value string) string {
 	escaped := strings.NewReplacer(
 		`\`, `\\`,

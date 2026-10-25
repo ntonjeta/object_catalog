@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEmailValidation(t *testing.T) {
@@ -80,6 +81,24 @@ func TestObjectAndCategoryValidation(t *testing.T) {
 	}
 	if err := ValidateCategoryName("   "); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty category name error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestObjectIsBusyAt(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	if (Object{}).IsBusyAt(now) {
+		t.Fatal("available object is busy")
+	}
+	if !(Object{Busy: true}).IsBusyAt(now) {
+		t.Fatal("busy object without expiry is not busy")
+	}
+	until := now.Add(time.Hour)
+	if !(Object{Busy: true, BusyUntil: &until}).IsBusyAt(now) {
+		t.Fatal("object before expiry is not busy")
+	}
+	past := now.Add(-time.Hour)
+	if (Object{Busy: true, BusyUntil: &past}).IsBusyAt(now) {
+		t.Fatal("object after expiry is busy")
 	}
 }
 

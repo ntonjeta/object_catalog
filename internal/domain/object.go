@@ -19,10 +19,21 @@ type Object struct {
 	Name        string
 	Description string
 	PhotoPath   string
+	Busy        bool
+	BusyUntil   *time.Time
 	Category    *Category
 	Tags        []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// IsBusyAt reports whether the object is taken at the given time. An object
+// without an expiry stays busy until it is explicitly released.
+func (o Object) IsBusyAt(now time.Time) bool {
+	if !o.Busy {
+		return false
+	}
+	return o.BusyUntil == nil || o.BusyUntil.After(now)
 }
 
 func NormalizeObjectName(name string) string {

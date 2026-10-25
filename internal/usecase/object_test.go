@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"biblio-oggetto/internal/domain"
 )
@@ -87,6 +88,70 @@ func TestObjectsCreateAndUpdate(t *testing.T) {
 	}
 	if _, err := uc.Get(ctx, created.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("get deleted object error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestObjectsSetBusy(t *testing.T) {
+	ctx := context.Background()
+	objects := newFakeObjects()
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	created, err := uc.Create(ctx, CreateObjectInput{Name: "Dune"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	until := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	busy, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{Busy: true, BusyUntil: &until})
+	if err != nil {
+		t.Fatalf("SetBusy: %v", err)
+	}
+	if !busy.Busy || busy.BusyUntil == nil || !busy.BusyUntil.Equal(until) {
+		t.Fatalf("busy object = %+v, want busy until %v", busy, until)
+	}
+	if got, err := uc.Get(ctx, created.ID); err != nil || !got.Busy {
+		t.Fatalf("Get busy = (%+v, %v), want busy", got, err)
+	}
+
+	released, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{})
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if released.Busy || released.BusyUntil != nil {
+		t.Fatalf("released object = %+v, want available", released)
+	}
+
+	past := time.Now().UTC().Add(-time.Minute)
+	if _, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{Busy: true, BusyUntil: &past}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("past expiry error = %v, want ErrInvalid", err)
+	}
+	if _, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{Busy: true}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing expiry error = %v, want ErrInvalid", err)
+	}
+	if _, err := uc.SetBusy(ctx, "missing", SetObjectBusyInput{}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing object error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestObjectsExpiredBusyIsAvailable(t *testing.T) {
+	ctx := context.Background()
+	objects := newFakeObjects()
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	past := time.Now().UTC().Add(-time.Hour)
+	expired := domain.Object{
+		ID:        "expired",
+		Name:      "Expired",
+		Busy:      true,
+		BusyUntil: &past,
+	}
+	if err := objects.Create(ctx, expired); err != nil {
+		t.Fatalf("create expired object: %v", err)
+	}
+	got, err := uc.Get(ctx, expired.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Busy || got.BusyUntil != nil {
+		t.Fatalf("expired object = %+v, want available", got)
 	}
 }
 

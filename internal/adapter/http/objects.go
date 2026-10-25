@@ -25,11 +25,18 @@ type updateObjectRequest struct {
 	RemovePhoto *bool     `json:"remove_photo"`
 }
 
+type setBusyRequest struct {
+	Busy      bool       `json:"busy"`
+	BusyUntil *time.Time `json:"busy_until"`
+}
+
 type objectResponse struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	PhotoPath   string            `json:"photo_path"`
+	Busy        bool              `json:"busy"`
+	BusyUntil   *time.Time        `json:"busy_until"`
 	Category    *categoryResponse `json:"category"`
 	Tags        []string          `json:"tags"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -156,6 +163,22 @@ func (s *Server) updateObject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
 }
 
+func (s *Server) setObjectBusy(w http.ResponseWriter, r *http.Request) {
+	var request setBusyRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	object, err := s.objects.SetBusy(r.Context(), r.PathValue("id"), usecase.SetObjectBusyInput{
+		Busy:      request.Busy,
+		BusyUntil: request.BusyUntil,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
+}
+
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	if err := s.objects.Delete(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, err)
@@ -170,6 +193,8 @@ func toObjectResponse(object domain.Object) objectResponse {
 		Name:        object.Name,
 		Description: object.Description,
 		PhotoPath:   object.PhotoPath,
+		Busy:        object.Busy,
+		BusyUntil:   object.BusyUntil,
 		Tags:        object.Tags,
 		CreatedAt:   object.CreatedAt,
 		UpdatedAt:   object.UpdatedAt,

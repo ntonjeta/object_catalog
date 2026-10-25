@@ -43,12 +43,18 @@ Objects have:
 - `name` (required)
 - `description`
 - `photo_path` (optional public URL)
+- `busy` flag and optional `busy_until` timestamp
 - optional category
 - tags
 - `created_at` and `updated_at`
 
 The administrator can create, update, and delete objects. Updating an object can
 replace or remove its photo. Deleting an object deletes its stored photo.
+
+Only the administrator can mark an object busy (taken). A busy object may have a
+`busy_until` timestamp and becomes available automatically after that time.
+Releasing clears both the flag and the expiry immediately. Public reads expose
+the effective busy state.
 
 ### Photo uploads
 
@@ -94,6 +100,8 @@ The embedded frontend provides:
 - object thumbnails and photo previews;
 - administrator login and logout;
 - object create/edit/delete with photo upload/replacement/removal;
+- administrator busy marking/release, with an availability badge for public
+  readers;
 - category create/rename/delete.
 
 There is no frontend build step and no external CDN dependency.
@@ -126,7 +134,8 @@ e2e/                    end-to-end HTTP tests
 - `users` — administrator identity, unique email, bcrypt password hash.
 - `sessions` — hashed session token, user reference, expiry.
 - `categories` — unique case-insensitive name.
-- `objects` — name, description, `photo_path`, optional category reference.
+- `objects` — name, description, `photo_path`, `busy`, optional `busy_until`,
+  optional category reference.
 - `object_tags` — composite primary key `(object_id, tag)`.
 
 Constraints:
@@ -136,7 +145,7 @@ Constraints:
 - Deleting a category sets `objects.category_id` to null.
 - Deleting an object cascades tags.
 - Schema creation is idempotent. Existing databases are migrated by adding
-  `objects.photo_path` when absent.
+  `objects.photo_path`, `objects.busy`, and `objects.busy_until` when absent.
 
 ## HTTP API
 
@@ -156,6 +165,7 @@ Constraints:
 | `GET` | `/api/objects/{id}` | public |
 | `POST` | `/api/objects` | admin |
 | `PATCH` | `/api/objects/{id}` | admin |
+| `PATCH` | `/api/objects/{id}/busy` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
 
 Object create/update accept both JSON and `multipart/form-data`. Multipart
@@ -163,7 +173,12 @@ fields are `name`, `description`, `category_id`, `tags` (comma-separated), and
 `photo`; updates additionally accept `remove_photo=true`. JSON updates accept
 `remove_photo` as a boolean but cannot upload a photo.
 
-Successful object responses include `photo_path` (empty when absent). Errors use:
+Busy state is changed with `PATCH /api/objects/{id}/busy`. To mark an object
+taken, send `{"busy":true,"busy_until":"<RFC3339 timestamp>"}`; `busy_until` is
+required and must be in the future. To release it, send `{"busy":false}`.
+
+Successful object responses include `photo_path` (empty when absent), `busy`,
+and `busy_until` (null when available). Errors use:
 
 ```json
 {"error":{"code":"invalid_input","message":"..."}}
@@ -197,7 +212,8 @@ go run ./cmd/server
   SQLite database, and a temporary upload directory.
 - Every endpoint is covered, including validation, duplicate/conflict cases,
   unauthorized writes, missing records, pagination, search combinations, photo
-  upload/serve/replace/remove/delete, and legacy schema migration.
+  upload/serve/replace/remove/delete, busy marking/release/expiry, and legacy
+  schema migration.
 - Third-party services are not used; none need mocks.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test
   verifies login, category CRUD, photo upload, thumbnails, search, edit/remove,

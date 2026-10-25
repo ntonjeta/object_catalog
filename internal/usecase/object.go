@@ -49,6 +49,11 @@ type ListObjectsInput struct {
 	Offset   int
 }
 
+type SetObjectBusyInput struct {
+	Busy      bool
+	BusyUntil *time.Time
+}
+
 func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.Object, error) {
 	name := domain.NormalizeObjectName(input.Name)
 	if err := domain.ValidateObjectName(name); err != nil {
@@ -100,6 +105,8 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	if err != nil {
 		return domain.Object{}, err
 	}
+	now := time.Now().UTC()
+	normalizeBusy(&object, now)
 	oldPhotoPath := object.PhotoPath
 	if input.Name != nil {
 		name := domain.NormalizeObjectName(*input.Name)
@@ -138,7 +145,7 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	} else if input.RemovePhoto {
 		object.PhotoPath = ""
 	}
-	object.UpdatedAt = time.Now().UTC()
+	object.UpdatedAt = now
 	if err := uc.objects.Update(ctx, object); err != nil {
 		uc.deletePhoto(ctx, newPhotoPath)
 		return domain.Object{}, err
@@ -150,7 +157,40 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 }
 
 func (uc *Objects) Get(ctx context.Context, id string) (domain.Object, error) {
-	return uc.objects.ByID(ctx, id)
+	object, err := uc.objects.ByID(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	normalizeBusy(&object, time.Now().UTC())
+	return object, nil
+}
+
+func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyInput) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	now := time.Now().UTC()
+	normalizeBusy(&object, now)
+	if input.Busy {
+		if input.BusyUntil == nil {
+			return domain.Object{}, fmt.Errorf("%w: busy_until is required when busy is true", domain.ErrInvalid)
+		}
+		until := input.BusyUntil.UTC()
+		if !until.After(now) {
+			return domain.Object{}, fmt.Errorf("%w: busy_until must be in the future", domain.ErrInvalid)
+		}
+		object.Busy = true
+		object.BusyUntil = &until
+	} else {
+		object.Busy = false
+		object.BusyUntil = nil
+	}
+	object.UpdatedAt = now
+	if err := uc.objects.Update(ctx, object); err != nil {
+		return domain.Object{}, err
+	}
+	return object, nil
 }
 
 func (uc *Objects) Delete(ctx context.Context, id string) error {
@@ -175,13 +215,21 @@ func (uc *Objects) List(ctx context.Context, input ListObjectsInput) ([]domain.O
 	if input.Offset < 0 {
 		return nil, 0, fmt.Errorf("%w: offset must not be negative", domain.ErrInvalid)
 	}
-	return uc.objects.List(ctx, ObjectFilter{
+	objects, total, err := uc.objects.List(ctx, ObjectFilter{
 		Query:    strings.TrimSpace(input.Query),
 		Category: strings.TrimSpace(input.Category),
 		Tag:      strings.ToLower(strings.TrimSpace(input.Tag)),
 		Limit:    input.Limit,
 		Offset:   input.Offset,
 	})
+	if err != nil {
+		return nil, 0, err
+	}
+	now := time.Now().UTC()
+	for i := range objects {
+		normalizeBusy(&objects[i], now)
+	}
+	return objects, total, nil
 }
 
 func (uc *Objects) category(ctx context.Context, id string) (*domain.Category, error) {
@@ -208,4 +256,11 @@ func (uc *Objects) deletePhoto(ctx context.Context, path string) {
 		return
 	}
 	_ = uc.photos.Delete(ctx, path)
+}
+
+func normalizeBusy(object *domain.Object, now time.Time) {
+	if object.Busy && !object.IsBusyAt(now) {
+		object.Busy = false
+		object.BusyUntil = nil
+	}
 }
