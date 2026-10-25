@@ -24,7 +24,7 @@ func TestStoreSavesAndDeletesPhoto(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	data := photoPNG(t)
-	publicPath, err := store.Save(context.Background(), usecase.PhotoUpload{
+	name, err := store.Save(context.Background(), usecase.PhotoUpload{
 		Reader:      bytes.NewReader(data),
 		Filename:    "../../escape.png",
 		ContentType: "text/plain",
@@ -32,11 +32,7 @@ func TestStoreSavesAndDeletesPhoto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if !strings.HasPrefix(publicPath, urlPrefix) {
-		t.Fatalf("public path = %q, want prefix %q", publicPath, urlPrefix)
-	}
-	name := strings.TrimPrefix(publicPath, urlPrefix)
-	if strings.Contains(name, "..") || strings.Contains(name, "/") {
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || name != filepath.Base(name) {
 		t.Fatalf("unsafe generated name %q", name)
 	}
 	stored, err := os.ReadFile(filepath.Join(store.Dir(), name))
@@ -47,13 +43,13 @@ func TestStoreSavesAndDeletesPhoto(t *testing.T) {
 		t.Fatal("stored photo does not match input")
 	}
 
-	if err := store.Delete(context.Background(), publicPath); err != nil {
+	if err := store.Delete(context.Background(), name); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(store.Dir(), name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("photo still exists or wrong error: %v", err)
 	}
-	if err := store.Delete(context.Background(), publicPath); err != nil {
+	if err := store.Delete(context.Background(), name); err != nil {
 		t.Fatalf("second Delete: %v", err)
 	}
 }

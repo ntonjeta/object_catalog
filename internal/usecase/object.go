@@ -75,7 +75,7 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 	if err != nil {
 		return domain.Object{}, fmt.Errorf("generate object id: %w", err)
 	}
-	photoPath, err := uc.savePhoto(ctx, input.Photo)
+	imageFile, err := uc.savePhoto(ctx, input.Photo)
 	if err != nil {
 		return domain.Object{}, err
 	}
@@ -84,14 +84,14 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 		ID:          id,
 		Name:        name,
 		Description: description,
-		PhotoPath:   photoPath,
+		ImagePath:   imageFile,
 		Category:    category,
 		Tags:        tags,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	if err := uc.objects.Create(ctx, object); err != nil {
-		uc.deletePhoto(ctx, photoPath)
+		uc.deletePhoto(ctx, imageFile)
 		return domain.Object{}, err
 	}
 	return object, nil
@@ -105,9 +105,7 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	if err != nil {
 		return domain.Object{}, err
 	}
-	now := time.Now().UTC()
-	normalizeBusy(&object, now)
-	oldPhotoPath := object.PhotoPath
+	oldImagePath := object.ImagePath
 	if input.Name != nil {
 		name := domain.NormalizeObjectName(*input.Name)
 		if err := domain.ValidateObjectName(name); err != nil {
@@ -136,22 +134,22 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 		}
 		object.Category = category
 	}
-	newPhotoPath, err := uc.savePhoto(ctx, input.Photo)
+	newImagePath, err := uc.savePhoto(ctx, input.Photo)
 	if err != nil {
 		return domain.Object{}, err
 	}
-	if newPhotoPath != "" {
-		object.PhotoPath = newPhotoPath
+	if newImagePath != "" {
+		object.ImagePath = newImagePath
 	} else if input.RemovePhoto {
-		object.PhotoPath = ""
+		object.ImagePath = ""
 	}
-	object.UpdatedAt = now
+	object.UpdatedAt = time.Now().UTC()
 	if err := uc.objects.Update(ctx, object); err != nil {
-		uc.deletePhoto(ctx, newPhotoPath)
+		uc.deletePhoto(ctx, newImagePath)
 		return domain.Object{}, err
 	}
-	if oldPhotoPath != object.PhotoPath {
-		uc.deletePhoto(ctx, oldPhotoPath)
+	if oldImagePath != object.ImagePath {
+		uc.deletePhoto(ctx, oldImagePath)
 	}
 	return object, nil
 }
@@ -201,7 +199,7 @@ func (uc *Objects) Delete(ctx context.Context, id string) error {
 	if err := uc.objects.Delete(ctx, id); err != nil {
 		return err
 	}
-	uc.deletePhoto(ctx, object.PhotoPath)
+	uc.deletePhoto(ctx, object.ImagePath)
 	return nil
 }
 

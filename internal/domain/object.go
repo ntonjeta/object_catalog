@@ -18,9 +18,7 @@ type Object struct {
 	ID          string
 	Name        string
 	Description string
-	PhotoPath   string
-	Busy        bool
-	BusyUntil   *time.Time
+	ImagePath   string
 	Category    *Category
 	Tags        []string
 	CreatedAt   time.Time

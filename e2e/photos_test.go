@@ -27,14 +27,14 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 	}, first, "cover.png")
 	assertStatus(t, response, http.StatusCreated, data)
 	object := decode[objectEnvelope](t, data).Object
-	if !strings.HasPrefix(object.PhotoPath, "/static/uploads/") {
-		t.Fatalf("photo path = %q, want /static/uploads/ prefix", object.PhotoPath)
+	if !strings.HasPrefix(object.ImagePath, "/static/uploads/") {
+		t.Fatalf("image path = %q, want /static/uploads/ prefix", object.ImagePath)
 	}
 	if !equalStrings(object.Tags, []string{"scifi", "classic"}) {
 		t.Fatalf("tags = %v", object.Tags)
 	}
 
-	response, data = environment.do(environment.anonymous, http.MethodGet, object.PhotoPath, nil)
+	response, data = environment.do(environment.anonymous, http.MethodGet, object.ImagePath, nil)
 	assertStatus(t, response, http.StatusOK, data)
 	if contentType := response.Header.Get("Content-Type"); !strings.Contains(contentType, "image/png") {
 		t.Fatalf("photo content type = %q, want image/png", contentType)
@@ -45,21 +45,21 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 
 	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/objects/"+object.ID, nil)
 	assertStatus(t, response, http.StatusOK, data)
-	if got := decode[objectEnvelope](t, data).Object.PhotoPath; got != object.PhotoPath {
-		t.Fatalf("public photo path = %q, want %q", got, object.PhotoPath)
+	if got := decode[objectEnvelope](t, data).Object.ImagePath; got != object.ImagePath {
+		t.Fatalf("public image path = %q, want %q", got, object.ImagePath)
 	}
 
 	second := testPNG(t, 3, 3, color.RGBA{B: 220, A: 255})
 	response, data = environment.doMultipart(environment.admin, http.MethodPatch, "/api/objects/"+object.ID, nil, second, "replacement.png")
 	assertStatus(t, response, http.StatusOK, data)
 	replaced := decode[objectEnvelope](t, data).Object
-	if replaced.PhotoPath == object.PhotoPath {
-		t.Fatal("photo path was not replaced")
+	if replaced.ImagePath == object.ImagePath {
+		t.Fatal("image path was not replaced")
 	}
 
-	response, data = environment.do(environment.anonymous, http.MethodGet, object.PhotoPath, nil)
+	response, data = environment.do(environment.anonymous, http.MethodGet, object.ImagePath, nil)
 	assertStatus(t, response, http.StatusNotFound, data)
-	response, data = environment.do(environment.anonymous, http.MethodGet, replaced.PhotoPath, nil)
+	response, data = environment.do(environment.anonymous, http.MethodGet, replaced.ImagePath, nil)
 	assertStatus(t, response, http.StatusOK, data)
 
 	response, data = environment.doMultipart(environment.admin, http.MethodPatch, "/api/objects/"+object.ID, map[string]string{
@@ -67,10 +67,10 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 	}, nil, "")
 	assertStatus(t, response, http.StatusOK, data)
 	removed := decode[objectEnvelope](t, data).Object
-	if removed.PhotoPath != "" {
-		t.Fatalf("photo path = %q, want empty", removed.PhotoPath)
+	if removed.ImagePath != "" {
+		t.Fatalf("image path = %q, want empty", removed.ImagePath)
 	}
-	response, data = environment.do(environment.anonymous, http.MethodGet, replaced.PhotoPath, nil)
+	response, data = environment.do(environment.anonymous, http.MethodGet, replaced.ImagePath, nil)
 	assertStatus(t, response, http.StatusNotFound, data)
 
 	response, data = environment.doMultipart(environment.admin, http.MethodPatch, "/api/objects/"+object.ID, nil, second, "again.png")
@@ -78,7 +78,7 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 	withPhoto := decode[objectEnvelope](t, data).Object
 	response, data = environment.do(environment.admin, http.MethodDelete, "/api/objects/"+object.ID, nil)
 	assertStatus(t, response, http.StatusNoContent, data)
-	response, data = environment.do(environment.anonymous, http.MethodGet, withPhoto.PhotoPath, nil)
+	response, data = environment.do(environment.anonymous, http.MethodGet, withPhoto.ImagePath, nil)
 	assertStatus(t, response, http.StatusNotFound, data)
 }
 
@@ -108,8 +108,8 @@ func TestObjectPhotoValidation(t *testing.T) {
 		"name": "JSON object",
 	})
 	assertStatus(t, response, http.StatusCreated, data)
-	if object := decode[objectEnvelope](t, data).Object; object.PhotoPath != "" {
-		t.Fatalf("JSON photo path = %q, want empty", object.PhotoPath)
+	if object := decode[objectEnvelope](t, data).Object; object.ImagePath != "" {
+		t.Fatalf("JSON image path = %q, want empty", object.ImagePath)
 	}
 }
 

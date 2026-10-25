@@ -23,9 +23,7 @@ var schema = []string{
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		description TEXT NOT NULL DEFAULT '',
-		photo_path TEXT NOT NULL DEFAULT '',
-		busy INTEGER NOT NULL DEFAULT 0,
-		busy_until TEXT,
+		image_path TEXT NOT NULL DEFAULT '',
 		category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL

@@ -225,30 +225,30 @@ func TestObjectsPhotoLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create with photo: %v", err)
 	}
-	if created.PhotoPath == "" || created.PhotoPath != photos.saved[0] {
-		t.Fatalf("photo path = %q, want %q", created.PhotoPath, photos.saved[0])
+	if created.ImagePath == "" || created.ImagePath != photos.saved[0] {
+		t.Fatalf("image path = %q, want %q", created.ImagePath, photos.saved[0])
 	}
 
 	replaced, err := uc.Update(ctx, created.ID, UpdateObjectInput{Photo: upload()})
 	if err != nil {
 		t.Fatalf("Update with photo: %v", err)
 	}
-	if replaced.PhotoPath == created.PhotoPath {
-		t.Fatal("photo path was not replaced")
+	if replaced.ImagePath == created.ImagePath {
+		t.Fatal("image path was not replaced")
 	}
-	if !containsString(photos.deleted, created.PhotoPath) {
-		t.Fatalf("old photo %q was not deleted; deleted = %v", created.PhotoPath, photos.deleted)
+	if !containsString(photos.deleted, created.ImagePath) {
+		t.Fatalf("old photo %q was not deleted; deleted = %v", created.ImagePath, photos.deleted)
 	}
 
 	removed, err := uc.Update(ctx, created.ID, UpdateObjectInput{RemovePhoto: true})
 	if err != nil {
 		t.Fatalf("Remove photo: %v", err)
 	}
-	if removed.PhotoPath != "" {
-		t.Fatalf("photo path = %q, want empty", removed.PhotoPath)
+	if removed.ImagePath != "" {
+		t.Fatalf("image path = %q, want empty", removed.ImagePath)
 	}
-	if !containsString(photos.deleted, replaced.PhotoPath) {
-		t.Fatalf("replaced photo %q was not deleted; deleted = %v", replaced.PhotoPath, photos.deleted)
+	if !containsString(photos.deleted, replaced.ImagePath) {
+		t.Fatalf("replaced photo %q was not deleted; deleted = %v", replaced.ImagePath, photos.deleted)
 	}
 
 	savedCount := len(photos.saved)
@@ -283,8 +283,8 @@ func TestObjectsPhotoLifecycle(t *testing.T) {
 	if err := uc.Delete(ctx, withPhoto.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if !containsString(photos.deleted, withPhoto.PhotoPath) {
-		t.Fatalf("photo %q was not deleted with object", withPhoto.PhotoPath)
+	if !containsString(photos.deleted, withPhoto.ImagePath) {
+		t.Fatalf("photo %q was not deleted with object", withPhoto.ImagePath)
 	}
 }
 

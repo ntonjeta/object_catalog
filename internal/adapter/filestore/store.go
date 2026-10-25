@@ -32,7 +32,7 @@ type Store struct {
 }
 
 // New creates the upload directory under root and returns a filesystem-backed
-// photo store. Files are served under /static/uploads/.
+// photo store.
 func New(root string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("photo root directory is required")
@@ -91,11 +91,11 @@ func (s *Store) Save(ctx context.Context, upload usecase.PhotoUpload) (string, e
 		os.Remove(path)
 		return "", fmt.Errorf("close photo: %w", err)
 	}
-	return urlPrefix + name, nil
+	return name, nil
 }
 
-func (s *Store) Delete(ctx context.Context, publicPath string) error {
-	name, err := s.fileName(publicPath)
+func (s *Store) Delete(ctx context.Context, fileName string) error {
+	name, err := s.fileName(fileName)
 	if err != nil {
 		return err
 	}
@@ -108,13 +108,10 @@ func (s *Store) Delete(ctx context.Context, publicPath string) error {
 	return nil
 }
 
-func (s *Store) fileName(publicPath string) (string, error) {
-	if !strings.HasPrefix(publicPath, urlPrefix) {
-		return "", fmt.Errorf("%w: invalid photo path", domain.ErrInvalid)
-	}
-	name := strings.TrimPrefix(publicPath, urlPrefix)
+func (s *Store) fileName(fileName string) (string, error) {
+	name := strings.TrimPrefix(fileName, urlPrefix)
 	if name == "" || strings.Contains(name, "/") || name != filepath.Base(name) || !fs.ValidPath(name) {
-		return "", fmt.Errorf("%w: invalid photo path", domain.ErrInvalid)
+		return "", fmt.Errorf("%w: invalid photo file name", domain.ErrInvalid)
 	}
 	return name, nil
 }

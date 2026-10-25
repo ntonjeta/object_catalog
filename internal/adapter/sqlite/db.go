@@ -45,15 +45,16 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate database: %w", err)
 		}
 	}
-	return ensureObjectColumns(ctx, db)
+	return ensureObjectImageColumn(ctx, db)
 }
 
-func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
+func ensureObjectImageColumn(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(objects)`)
 	if err != nil {
 		return fmt.Errorf("inspect objects table: %w", err)
 	}
-	found := make(map[string]bool)
+	hasImage := false
+	hasLegacyPhoto := false
 	for rows.Next() {
 		var (
 			position     int
@@ -67,7 +68,12 @@ func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
 			rows.Close()
 			return fmt.Errorf("inspect objects column: %w", err)
 		}
-		found[name] = true
+		switch name {
+		case "image_path":
+			hasImage = true
+		case "photo_path":
+			hasLegacyPhoto = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

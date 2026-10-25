@@ -236,7 +236,7 @@ func newFakePhotos() *fakePhotos {
 
 func (f *fakePhotos) Save(_ context.Context, _ PhotoUpload) (string, error) {
 	f.next++
-	path := fmt.Sprintf("/static/uploads/photo-%d.png", f.next)
+	path := fmt.Sprintf("photo-%d.png", f.next)
 	f.saved = append(f.saved, path)
 	return path, nil
 }

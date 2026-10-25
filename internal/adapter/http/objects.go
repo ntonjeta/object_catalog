@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"biblio-oggetto/internal/domain"
 	"biblio-oggetto/internal/usecase"
 )
+
+const imageURLPrefix = "/static/uploads/"
 
 type createObjectRequest struct {
 	Name        string   `json:"name"`
@@ -34,9 +37,7 @@ type objectResponse struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	PhotoPath   string            `json:"photo_path"`
-	Busy        bool              `json:"busy"`
-	BusyUntil   *time.Time        `json:"busy_until"`
+	ImagePath   string            `json:"image_path"`
 	Category    *categoryResponse `json:"category"`
 	Tags        []string          `json:"tags"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -192,9 +193,7 @@ func toObjectResponse(object domain.Object) objectResponse {
 		ID:          object.ID,
 		Name:        object.Name,
 		Description: object.Description,
-		PhotoPath:   object.PhotoPath,
-		Busy:        object.Busy,
-		BusyUntil:   object.BusyUntil,
+		ImagePath:   imageURL(object.ImagePath),
 		Tags:        object.Tags,
 		CreatedAt:   object.CreatedAt,
 		UpdatedAt:   object.UpdatedAt,
@@ -207,6 +206,13 @@ func toObjectResponse(object domain.Object) objectResponse {
 		response.Category = &category
 	}
 	return response
+}
+
+func imageURL(fileName string) string {
+	if fileName == "" {
+		return ""
+	}
+	return imageURLPrefix + strings.TrimPrefix(fileName, imageURLPrefix)
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {

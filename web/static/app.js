@@ -270,9 +270,9 @@
     }
   }
 
-  function currentObjectPhotoPath() {
+  function currentObjectImagePath() {
     const object = state.objects.find((item) => item.id === state.editingObjectId);
-    return object ? object.photo_path : "";
+    return object ? object.image_path : "";
   }
 
   function populateCategorySelects() {
@@ -374,9 +374,9 @@
       );
 
       card.append(top);
-      if (object.photo_path) {
+      if (object.image_path) {
         const photo = el("img", "object-photo");
-        photo.src = object.photo_path;
+        photo.src = object.image_path;
         photo.alt = `Photo of ${object.name}`;
         photo.loading = "lazy";
         photo.decoding = "async";
@@ -572,7 +572,7 @@
     elements.objectSave.textContent = "Save changes";
     elements.objectPhoto.value = "";
     elements.objectRemovePhoto.checked = false;
-    showPhotoPreview(object.photo_path);
+    showPhotoPreview(object.image_path);
     populateCategorySelects();
     elements.objectCategory.value = object.category ? object.category.id : "";
     hideFormError(elements.objectError);
@@ -898,13 +898,13 @@
       const file = elements.objectPhoto.files[0];
       if (!file) {
         elements.objectRemovePhoto.checked = false;
-        showPhotoPreview(currentObjectPhotoPath());
+        showPhotoPreview(currentObjectImagePath());
         return;
       }
       if (file.size > 5 * 1024 * 1024) {
         elements.objectPhoto.value = "";
         showFormError(elements.objectError, "Photo must be at most 5 MB.");
-        showPhotoPreview(currentObjectPhotoPath());
+        showPhotoPreview(currentObjectImagePath());
         return;
       }
       elements.objectRemovePhoto.checked = false;
@@ -914,14 +914,14 @@
     elements.objectRemovePhoto.addEventListener("change", () => {
       if (elements.objectRemovePhoto.checked) {
         elements.objectPhoto.value = "";
-        if (currentObjectPhotoPath()) {
+        if (currentObjectImagePath()) {
           hidePhotoImage();
           elements.objectPhotoPreviewWrap.hidden = false;
         } else {
           clearPhotoPreview();
         }
       } else {
-        showPhotoPreview(currentObjectPhotoPath());
+        showPhotoPreview(currentObjectImagePath());
       }
     });
 
