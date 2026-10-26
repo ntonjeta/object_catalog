@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability for the catalog
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is the problem you are trying to solve? Describe the use case rather than the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the application do? Include API or UI details if you already know them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: |
+        Relevant constraints for this project:
+        - single administrator account, no public signup
+        - hexagonal Go backend, SQLite storage
+        - vanilla frontend, no build step and no CDN
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues and this has not been requested.
+          required: true
+        - label: This request is about the application, not about hosting or deployment.
+          required: false
