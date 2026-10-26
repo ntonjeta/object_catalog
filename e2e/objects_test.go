@@ -232,6 +232,75 @@ func TestObjectBusyState(t *testing.T) {
 	}
 }
 
+func TestObjectReservation(t *testing.T) {
+	environment := newEnv(t)
+	environment.login()
+	object := environment.createObject(map[string]any{"name": "Dune"})
+	path := "/api/objects/" + object.ID + "/reservation"
+	now := time.Now().UTC()
+	from := now.Add(24 * time.Hour).Truncate(time.Second)
+	until := now.Add(48 * time.Hour).Truncate(time.Second)
+
+	response, data := environment.do(environment.anonymous, http.MethodPatch, path, map[string]any{
+		"from":  from,
+		"until": until,
+	})
+	assertStatus(t, response, http.StatusUnauthorized, data)
+
+	response, data = environment.do(environment.admin, http.MethodPatch, path, map[string]any{
+		"from":  from,
+		"until": until,
+	})
+	assertStatus(t, response, http.StatusOK, data)
+	reserved := decode[objectEnvelope](t, data).Object
+	if reserved.ReservedFrom == nil || !reserved.ReservedFrom.Equal(from) || reserved.Busy {
+		t.Fatalf("reserved object = %+v, want reserved from %v and not busy", reserved, from)
+	}
+
+	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/objects/"+object.ID, nil)
+	assertStatus(t, response, http.StatusOK, data)
+	public := decode[objectEnvelope](t, data).Object
+	if public.Busy || public.ReservedFrom == nil {
+		t.Fatalf("public object = %+v, want reserved and available", public)
+	}
+
+	for _, body := range []map[string]any{
+		{"from": now.Add(-time.Hour)},
+		{"from": from, "until": now.Add(-time.Hour)},
+		{"from": from, "until": from},
+	} {
+		response, data = environment.do(environment.admin, http.MethodPatch, path, body)
+		assertStatus(t, response, http.StatusBadRequest, data)
+		assertErrorCode(t, data, "invalid_input")
+	}
+
+	response, data = environment.do(environment.admin, http.MethodPatch, "/api/objects/missing/reservation", map[string]any{
+		"from": from,
+	})
+	assertStatus(t, response, http.StatusNotFound, data)
+
+	busyObject := environment.createObject(map[string]any{"name": "Crimeq"})
+	response, data = environment.do(environment.admin, http.MethodPatch, "/api/objects/"+busyObject.ID+"/busy", map[string]any{
+		"busy":       true,
+		"busy_until": until,
+	})
+	assertStatus(t, response, http.StatusOK, data)
+	response, data = environment.do(environment.admin, http.MethodPatch, "/api/objects/"+busyObject.ID+"/reservation", map[string]any{
+		"from": from,
+	})
+	assertStatus(t, response, http.StatusConflict, data)
+	assertErrorCode(t, data, "conflict")
+
+	response, data = environment.do(environment.admin, http.MethodPatch, "/api/objects/"+object.ID+"/busy", map[string]any{
+		"busy": false,
+	})
+	assertStatus(t, response, http.StatusOK, data)
+	released := decode[objectEnvelope](t, data).Object
+	if released.Busy || released.ReservedFrom != nil {
+		t.Fatalf("released object = %+v, want available", released)
+	}
+}
+
 func TestObjectValidation(t *testing.T) {
 	environment := newEnv(t)
 	environment.login()

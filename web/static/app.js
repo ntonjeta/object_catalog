@@ -48,6 +48,7 @@ busyDialog: document.getElementById("busy-dialog"),
     busyDialogTitle: document.getElementById("busy-dialog-title"),
     busyObjectId: document.getElementById("busy-object-id"),
     busyUntil: document.getElementById("busy-until"),
+    busyFrom: document.getElementById("busy-from"),
     busyError: document.getElementById("busy-error"),
     busySave: document.getElementById("busy-save"),
     importDialog: document.getElementById("import-dialog"),
@@ -373,6 +374,8 @@ busyDialog: document.getElementById("busy-dialog"),
           ? `Unavailable until ${formatDate(object.busy_until)}`
           : "Unavailable";
         top.append(el("span", "busy-badge", label));
+      } else if (object.reserved_from) {
+        top.append(el("span", "busy-badge", `Reserved from ${formatDate(object.reserved_from)}`));
       }
 
       const description = el(
@@ -413,17 +416,18 @@ busyDialog: document.getElementById("busy-dialog"),
       editButton.dataset.action = "edit-object";
       editButton.dataset.id = object.id;
       editButton.setAttribute("aria-label", `Edit ${object.name}`);
+      const taken = object.busy || object.reserved_from;
       const busyButton = el(
         "button",
         "button button-ghost button-small",
-        object.busy ? "Release" : "Mark busy",
+        taken ? "Release" : "Mark busy",
       );
       busyButton.type = "button";
-      busyButton.dataset.action = object.busy ? "release-object" : "busy-object";
+      busyButton.dataset.action = taken ? "release-object" : "busy-object";
       busyButton.dataset.id = object.id;
       busyButton.setAttribute(
         "aria-label",
-        object.busy ? `Release ${object.name}` : `Mark ${object.name} busy`,
+        taken ? `Release ${object.name}` : `Mark ${object.name} busy`,
       );
       const deleteButton = el("button", "button button-danger button-small", "Delete");
       deleteButton.type = "button";
@@ -630,6 +634,8 @@ busyDialog: document.getElementById("busy-dialog"),
     const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
     elements.busyUntil.min = toDateTimeLocal(minimum);
     elements.busyUntil.value = toDateTimeLocal(suggested);
+    elements.busyFrom.min = toDateTimeLocal(minimum);
+    elements.busyFrom.value = "";
     hideFormError(elements.busyError);
     openDialog(elements.busyDialog);
     elements.busyUntil.focus();
@@ -855,12 +861,34 @@ busyDialog: document.getElementById("busy-dialog"),
         return;
       }
       elements.busySave.disabled = true;
+      const fromValue = elements.busyFrom.value;
+      const from = fromValue ? new Date(fromValue) : null;
+      if (from && (Number.isNaN(from.getTime()) || from.getTime() <= Date.now())) {
+        showFormError(elements.busyError, "Choose a reservation start in the future.");
+        elements.busyFrom.focus();
+        elements.busySave.disabled = false;
+        return;
+      }
+      if (from && from.getTime() >= until.getTime()) {
+        showFormError(elements.busyError, "Busy until must be after the reservation start.");
+        elements.busyUntil.focus();
+        elements.busySave.disabled = false;
+        return;
+      }
       try {
-        await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/busy`, {
-          method: "PATCH",
-          body: { busy: true, busy_until: until.toISOString() },
-        });
-        showStatus("Object marked busy.", "success");
+        if (from) {
+          await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/reservation`, {
+            method: "PATCH",
+            body: { from: from.toISOString(), until: until.toISOString() },
+          });
+          showStatus("Object reserved.", "success");
+        } else {
+          await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/busy`, {
+            method: "PATCH",
+            body: { busy: true, busy_until: until.toISOString() },
+          });
+          showStatus("Object marked busy.", "success");
+        }
         closeDialog(elements.busyDialog);
         state.editingBusyId = null;
         await loadObjects();

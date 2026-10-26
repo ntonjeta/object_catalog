@@ -92,6 +92,7 @@ func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
 		{"image_path", `image_path TEXT NOT NULL DEFAULT ''`},
 		{"busy", `busy INTEGER NOT NULL DEFAULT 0`},
 		{"busy_until", `busy_until TEXT`},
+		{"reserved_from", `reserved_from TEXT`},
 	} {
 		if found[column.name] {
 			continue

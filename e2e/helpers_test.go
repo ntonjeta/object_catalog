@@ -46,16 +46,17 @@ type categoriesEnvelope struct {
 }
 
 type objectDTO struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	ImagePath   string       `json:"image_path"`
-	Busy        bool         `json:"busy"`
-	BusyUntil   *time.Time   `json:"busy_until"`
-	Category    *categoryDTO `json:"category"`
-	Tags        []string     `json:"tags"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	Description  string       `json:"description"`
+	ImagePath    string       `json:"image_path"`
+	Busy         bool         `json:"busy"`
+	BusyUntil    *time.Time   `json:"busy_until"`
+	ReservedFrom *time.Time   `json:"reserved_from"`
+	Category     *categoryDTO `json:"category"`
+	Tags         []string     `json:"tags"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 type objectEnvelope struct {

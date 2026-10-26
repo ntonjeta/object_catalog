@@ -26,10 +26,10 @@ func (r *ObjectRepo) Create(ctx context.Context, object domain.Object) error {
 	defer tx.Rollback()
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO objects (id, name, description, image_path, busy, busy_until, category_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO objects (id, name, description, image_path, busy, busy_until, reserved_from, category_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		object.ID, object.Name, object.Description, object.ImagePath,
-		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), categoryID(object.Category),
+		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), formatOptionalTime(object.ReservedFrom), categoryID(object.Category),
 		formatTime(object.CreatedAt), formatTime(object.UpdatedAt),
 	)
 	if err != nil {
@@ -52,9 +52,9 @@ func (r *ObjectRepo) Update(ctx context.Context, object domain.Object) error {
 	defer tx.Rollback()
 
 	result, err := tx.ExecContext(ctx,
-		`UPDATE objects SET name = ?, description = ?, image_path = ?, busy = ?, busy_until = ?, category_id = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE objects SET name = ?, description = ?, image_path = ?, busy = ?, busy_until = ?, reserved_from = ?, category_id = ?, updated_at = ? WHERE id = ?`,
 		object.Name, object.Description, object.ImagePath,
-		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), categoryID(object.Category),
+		busyValue(object.Busy), formatOptionalTime(object.BusyUntil), formatOptionalTime(object.ReservedFrom), categoryID(object.Category),
 		formatTime(object.UpdatedAt), object.ID,
 	)
 	if err != nil {
@@ -228,7 +228,7 @@ func replaceTags(ctx context.Context, tx *sql.Tx, objectID string, tags []string
 }
 
 const objectSelect = `SELECT
-	o.id, o.name, o.description, o.image_path, o.busy, o.busy_until, o.created_at, o.updated_at,
+	o.id, o.name, o.description, o.image_path, o.busy, o.busy_until, o.reserved_from, o.created_at, o.updated_at,
 	c.id, c.name, c.created_at, c.updated_at
 	FROM objects o
 	LEFT JOIN categories c ON c.id = o.category_id`
@@ -273,6 +273,7 @@ func scanObject(row scanner) (domain.Object, error) {
 		object               domain.Object
 		busy                 int
 		busyUntil            sql.NullString
+		reservedFrom         sql.NullString
 		createdAt, updatedAt string
 		categoryID           sql.NullString
 		categoryName         sql.NullString
@@ -280,7 +281,7 @@ func scanObject(row scanner) (domain.Object, error) {
 		categoryUpdatedAt    sql.NullString
 	)
 	if err := row.Scan(
-		&object.ID, &object.Name, &object.Description, &object.ImagePath, &busy, &busyUntil,
+		&object.ID, &object.Name, &object.Description, &object.ImagePath, &busy, &busyUntil, &reservedFrom,
 		&createdAt, &updatedAt,
 		&categoryID, &categoryName, &categoryCreatedAt, &categoryUpdatedAt,
 	); err != nil {
@@ -294,6 +295,13 @@ func scanObject(row scanner) (domain.Object, error) {
 			return domain.Object{}, err
 		}
 		object.BusyUntil = &until
+	}
+	if reservedFrom.Valid {
+		from, err := parseTime(reservedFrom.String)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		object.ReservedFrom = &from
 	}
 	if object.CreatedAt, err = parseTime(createdAt); err != nil {
 		return domain.Object{}, err

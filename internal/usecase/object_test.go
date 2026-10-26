@@ -132,6 +132,65 @@ func TestObjectsSetBusy(t *testing.T) {
 	}
 }
 
+func TestObjectsReserve(t *testing.T) {
+	ctx := context.Background()
+	objects := newFakeObjects()
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	created, err := uc.Create(ctx, CreateObjectInput{Name: "Dune"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	now := time.Now().UTC()
+	from := now.Add(24 * time.Hour).Truncate(time.Second)
+	until := now.Add(48 * time.Hour).Truncate(time.Second)
+	reserved, err := uc.Reserve(ctx, created.ID, ReserveObjectInput{From: from, Until: &until})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if !reserved.Busy || reserved.ReservedFrom == nil || !reserved.ReservedFrom.Equal(from) {
+		t.Fatalf("reserved object = %+v, want reserved from %v", reserved, from)
+	}
+	if reserved.IsBusyAt(now) {
+		t.Fatal("reserved object is busy before reservation start")
+	}
+
+	got, err := uc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.Busy || got.ReservedFrom == nil {
+		t.Fatalf("get reserved object = %+v, want reservation", got)
+	}
+
+	released, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{})
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if released.Busy || released.ReservedFrom != nil {
+		t.Fatalf("released object = %+v, want available", released)
+	}
+
+	past := now.Add(-time.Hour)
+	if _, err := uc.Reserve(ctx, created.ID, ReserveObjectInput{From: past}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("past start error = %v, want ErrInvalid", err)
+	}
+	if _, err := uc.Reserve(ctx, created.ID, ReserveObjectInput{From: from, Until: &past}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("end before start error = %v, want ErrInvalid", err)
+	}
+	if _, err := uc.Reserve(ctx, "missing", ReserveObjectInput{From: from}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing object error = %v, want ErrNotFound", err)
+	}
+
+	busyUntil := now.Add(time.Hour)
+	if _, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{Busy: true, BusyUntil: &busyUntil}); err != nil {
+		t.Fatalf("mark busy: %v", err)
+	}
+	if _, err := uc.Reserve(ctx, created.ID, ReserveObjectInput{From: from}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("busy object error = %v, want ErrConflict", err)
+	}
+}
+
 func TestObjectsExpiredBusyIsAvailable(t *testing.T) {
 	ctx := context.Background()
 	objects := newFakeObjects()

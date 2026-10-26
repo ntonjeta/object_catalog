@@ -156,12 +156,16 @@
     <form id="busy-form" class="dialog-form">
       <div>
         <h2 id="busy-dialog-title">Mark object busy</h2>
-        <p class="muted">The object is unavailable until the selected time.</p>
+        <p class="muted">The object is unavailable until the selected time, or from the selected start when reserving.</p>
       </div>
       <input id="busy-object-id" type="hidden">
       <label class="field">
         <span>Busy until</span>
         <input id="busy-until" name="busy_until" type="datetime-local" required>
+      </label>
+      <label class="field">
+        <span>Reserve from (optional)</span>
+        <input id="busy-from" name="reserved_from" type="datetime-local">
       </label>
       <p id="busy-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">

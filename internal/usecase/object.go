@@ -56,6 +56,11 @@ type SetObjectBusyInput struct {
 	BusyUntil *time.Time
 }
 
+type ReserveObjectInput struct {
+	From  time.Time
+	Until *time.Time
+}
+
 func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.Object, error) {
 	name := domain.NormalizeObjectName(input.Name)
 	if err := domain.ValidateObjectName(name); err != nil {
@@ -214,10 +219,47 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 		}
 		object.Busy = true
 		object.BusyUntil = &until
+		object.ReservedFrom = nil
 	} else {
 		object.Busy = false
 		object.BusyUntil = nil
+		object.ReservedFrom = nil
 	}
+	object.UpdatedAt = now
+	if err := uc.objects.Update(ctx, object); err != nil {
+		return domain.Object{}, err
+	}
+	return object, nil
+}
+
+// Reserve marks an object busy from a future start time. The object stays
+// available until the reservation starts; Until is optional and leaves the
+// object taken indefinitely once started.
+func (uc *Objects) Reserve(ctx context.Context, id string, input ReserveObjectInput) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	now := time.Now().UTC()
+	normalizeBusy(&object, now)
+	if object.IsBusyAt(now) {
+		return domain.Object{}, fmt.Errorf("%w: object is already busy", domain.ErrConflict)
+	}
+	from := input.From.UTC()
+	if !from.After(now) {
+		return domain.Object{}, fmt.Errorf("%w: reservation start must be in the future", domain.ErrInvalid)
+	}
+	var until *time.Time
+	if input.Until != nil {
+		end := input.Until.UTC()
+		if !end.After(from) {
+			return domain.Object{}, fmt.Errorf("%w: reservation end must be after the start", domain.ErrInvalid)
+		}
+		until = &end
+	}
+	object.Busy = true
+	object.ReservedFrom = &from
+	object.BusyUntil = until
 	object.UpdatedAt = now
 	if err := uc.objects.Update(ctx, object); err != nil {
 		return domain.Object{}, err
@@ -291,8 +333,9 @@ func (uc *Objects) deletePhoto(ctx context.Context, path string) {
 }
 
 func normalizeBusy(object *domain.Object, now time.Time) {
-	if object.Busy && !object.IsBusyAt(now) {
+	if object.Busy && object.BusyUntil != nil && !object.BusyUntil.After(now) {
 		object.Busy = false
 		object.BusyUntil = nil
+		object.ReservedFrom = nil
 	}
 }

@@ -44,6 +44,7 @@ Objects have:
 - `description`
 - `image_path` (optional public URL)
 - `busy` flag and optional `busy_until` timestamp
+- optional `reserved_from` timestamp for future reservations
 - optional category
 - tags
 - `created_at` and `updated_at`
@@ -55,6 +56,11 @@ Only the administrator can mark an object busy (taken). A busy object may have a
 `busy_until` timestamp and becomes available automatically after that time.
 Releasing clears both the flag and the expiry immediately. Public reads expose
 the effective busy state.
+
+The administrator can also reserve an object for the future. A reserved object
+stays available until `reserved_from` is reached, then behaves as busy until
+`busy_until` (optional; without it the object stays taken once the reservation
+starts). Releasing an object clears the reservation immediately.
 
 ### Photo uploads
 
@@ -130,7 +136,7 @@ The embedded frontend provides:
 - object thumbnails and photo previews;
 - administrator login and logout;
 - object create/edit/delete with photo upload/replacement/removal;
-- administrator busy marking/release, with an availability badge for public
+- administrator busy marking/release and future reservations, with an availability badge for public
   readers;
 - object import from `.xlsx` or CSV with a per-row result summary;
 - category create/rename/delete.
@@ -167,7 +173,7 @@ e2e/                    end-to-end HTTP tests
 - `sessions` — hashed session token, user reference, expiry.
 - `categories` — unique case-insensitive name.
 - `objects` — name, description, `image_path`, `busy`, optional `busy_until`,
-  optional category reference.
+  optional `reserved_from`, optional category reference.
 - `object_tags` — composite primary key `(object_id, tag)`.
 
 Constraints:
@@ -200,6 +206,7 @@ Constraints:
 | `POST` | `/api/objects/import` | admin |
 | `PATCH` | `/api/objects/{id}` | admin |
 | `PATCH` | `/api/objects/{id}/busy` | admin |
+| `PATCH` | `/api/objects/{id}/reservation` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
 
 Object create/update accept both JSON and `multipart/form-data`. Multipart
@@ -210,9 +217,14 @@ fields are `name`, `description`, `category_id`, `tags` (comma-separated), and
 Busy state is changed with `PATCH /api/objects/{id}/busy`. To mark an object
 taken, send `{"busy":true,"busy_until":"<RFC3339 timestamp>"}`; `busy_until` is
 required and must be in the future. To release it, send `{"busy":false}`.
+Reservations use `PATCH /api/objects/{id}/reservation` with
+`{"from":"<RFC3339 timestamp>"}` and an optional `until`. `from` must be in the
+future and `until` must be after `from`; reserving a currently busy object
+fails with `conflict`.
 
-Successful object responses include `image_path` (empty when absent), `busy`,
-and `busy_until` (null when available). The import endpoint returns per-row
+Successful object responses include `image_path` (empty when absent), `busy`
+(the effective state at read time), `busy_until`, and `reserved_from` (null
+when the object carries no reservation). The import endpoint returns per-row
 outcomes:
 
 ```json
@@ -258,7 +270,7 @@ go run ./cmd/server
   SQLite database, and a temporary upload directory.
 - Every endpoint is covered, including validation, duplicate/conflict cases,
   unauthorized writes, missing records, pagination, search combinations, photo
-upload/serve/replace/remove/delete, busy marking/release/expiry, CSV/XLSX
+upload/serve/replace/remove/delete, busy marking/release/expiry, reservations, CSV/XLSX
   import, partial import failures, and legacy schema migration.
 - Third-party services are not used; none need mocks.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test

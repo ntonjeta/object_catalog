@@ -100,6 +100,13 @@ func TestObjectIsBusyAt(t *testing.T) {
 	if (Object{Busy: true, BusyUntil: &past}).IsBusyAt(now) {
 		t.Fatal("object after expiry is busy")
 	}
+	start := now.Add(time.Hour)
+	if (Object{Busy: true, ReservedFrom: &start, BusyUntil: &until}).IsBusyAt(now) {
+		t.Fatal("object before reservation start is busy")
+	}
+	if !(Object{Busy: true, ReservedFrom: &past, BusyUntil: &until}).IsBusyAt(now) {
+		t.Fatal("object during reservation window is not busy")
+	}
 }
 
 func TestObjectPhotoPathValidation(t *testing.T) {

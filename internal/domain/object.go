@@ -17,22 +17,27 @@ const (
 )
 
 type Object struct {
-	ID          string
-	Name        string
-	Description string
-	ImagePath   string
-	Busy        bool
-	BusyUntil   *time.Time
-	Category    *Category
-	Tags        []string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           string
+	Name         string
+	Description  string
+	ImagePath    string
+	Busy         bool
+	BusyUntil    *time.Time
+	ReservedFrom *time.Time
+	Category     *Category
+	Tags         []string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // IsBusyAt reports whether the object is taken at the given time. An object
-// without an expiry stays busy until it is explicitly released.
+// without an expiry stays busy until it is explicitly released. A reserved
+// object stays available until its reservation starts.
 func (o Object) IsBusyAt(now time.Time) bool {
 	if !o.Busy {
+		return false
+	}
+	if o.ReservedFrom != nil && now.Before(*o.ReservedFrom) {
 		return false
 	}
 	return o.BusyUntil == nil || o.BusyUntil.After(now)

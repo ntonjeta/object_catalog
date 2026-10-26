@@ -12,6 +12,7 @@ HTML/CSS/JavaScript embedded in the binary — no build step, no CDN.
 - Public browsing with search, category and tag filters, and pagination
 - Object management: create, edit, delete, photo upload/replace/remove
 - Busy ("taken") marking with optional expiry, plus public availability badge
+- Future reservations made by the administrator; the object stays available until the reservation starts
 - Categories with unique, case-insensitive names
 - Bulk import from `.xlsx` or `.csv` with per-row results
 - Session authentication (bcrypt passwords, opaque server-side sessions)
@@ -75,6 +76,7 @@ Set `COOKIE_SECURE=true` when serving over HTTPS.
 | `POST` | `/api/objects/import` | admin |
 | `PATCH` | `/api/objects/{id}` | admin |
 | `PATCH` | `/api/objects/{id}/busy` | admin |
+| `PATCH` | `/api/objects/{id}/reservation` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
 
 `GET /api/objects` accepts `q`, `category`, `tag`, `limit` (max 100), and

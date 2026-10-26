@@ -86,8 +86,9 @@ func TestOpenRenamesLegacyPhotoPath(t *testing.T) {
 	var imagePath string
 	var busy int
 	var busyUntil sql.NullString
-	if err := db.QueryRow(`SELECT image_path, busy, busy_until FROM objects WHERE id = 'legacy'`).
-		Scan(&imagePath, &busy, &busyUntil); err != nil {
+	var reservedFrom sql.NullString
+	if err := db.QueryRow(`SELECT image_path, busy, busy_until, reserved_from FROM objects WHERE id = 'legacy'`).
+		Scan(&imagePath, &busy, &busyUntil, &reservedFrom); err != nil {
 		t.Fatalf("query migrated image_path: %v", err)
 	}
 	if imagePath != "/static/uploads/old.png" {
@@ -98,6 +99,9 @@ func TestOpenRenamesLegacyPhotoPath(t *testing.T) {
 	}
 	if busyUntil.Valid {
 		t.Fatalf("busy_until = %q, want NULL default", busyUntil.String)
+	}
+	if reservedFrom.Valid {
+		t.Fatalf("reserved_from = %q, want NULL default", reservedFrom.String)
 	}
 }
 

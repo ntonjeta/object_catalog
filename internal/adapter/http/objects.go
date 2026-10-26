@@ -33,17 +33,23 @@ type setBusyRequest struct {
 	BusyUntil *time.Time `json:"busy_until"`
 }
 
+type reserveRequest struct {
+	From  time.Time  `json:"from"`
+	Until *time.Time `json:"until"`
+}
+
 type objectResponse struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	ImagePath   string            `json:"image_path"`
-	Busy        bool              `json:"busy"`
-	BusyUntil   *time.Time        `json:"busy_until"`
-	Category    *categoryResponse `json:"category"`
-	Tags        []string          `json:"tags"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	ImagePath    string            `json:"image_path"`
+	Busy         bool              `json:"busy"`
+	BusyUntil    *time.Time        `json:"busy_until"`
+	ReservedFrom *time.Time        `json:"reserved_from"`
+	Category     *categoryResponse `json:"category"`
+	Tags         []string          `json:"tags"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 type objectEnvelope struct {
@@ -182,6 +188,22 @@ func (s *Server) setObjectBusy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
 }
 
+func (s *Server) reserveObject(w http.ResponseWriter, r *http.Request) {
+	var request reserveRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	object, err := s.objects.Reserve(r.Context(), r.PathValue("id"), usecase.ReserveObjectInput{
+		From:  request.From,
+		Until: request.Until,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
+}
+
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	if err := s.objects.Delete(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, err)
@@ -192,15 +214,16 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 
 func toObjectResponse(object domain.Object) objectResponse {
 	response := objectResponse{
-		ID:          object.ID,
-		Name:        object.Name,
-		Description: object.Description,
-		ImagePath:   imageURL(object.ImagePath),
-		Busy:        object.Busy,
-		BusyUntil:   object.BusyUntil,
-		Tags:        object.Tags,
-		CreatedAt:   object.CreatedAt,
-		UpdatedAt:   object.UpdatedAt,
+		ID:           object.ID,
+		Name:         object.Name,
+		Description:  object.Description,
+		ImagePath:    imageURL(object.ImagePath),
+		Busy:         object.IsBusyAt(time.Now().UTC()),
+		BusyUntil:    object.BusyUntil,
+		ReservedFrom: object.ReservedFrom,
+		Tags:         object.Tags,
+		CreatedAt:    object.CreatedAt,
+		UpdatedAt:    object.UpdatedAt,
 	}
 	if response.Tags == nil {
 		response.Tags = []string{}
