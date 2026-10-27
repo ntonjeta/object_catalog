@@ -223,8 +223,9 @@ func (f *Federation) Followers(ctx context.Context) ([]domain.Follower, error) {
 }
 
 // AddPeer joins a remote catalog instance: it resolves the handle or actor
-// URL, stores the peer as pending and queues the Follow activity. Follows
-// ride the Deliverer backoff, so restarts self-heal. Nothing is stored when
+// URL, stores the peer as pending and queues the Follow activity. The stored
+// peer row is returned, so its id stays stable across re-joins. Follows ride
+// the Deliverer backoff, so restarts self-heal. Nothing is stored when
 // resolution fails; joining requires a live target.
 func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, error) {
 	target = strings.TrimSpace(target)
@@ -261,6 +262,10 @@ func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, e
 	if err := f.peers.Upsert(ctx, peer); err != nil {
 		return domain.Peer{}, err
 	}
+	stored, err := f.peers.ByFollowActivityID(ctx, peer.FollowActivityID)
+	if err != nil {
+		return domain.Peer{}, err
+	}
 	if err := f.outbox.Append(ctx, domain.OutboxEntry{
 		ID:        id,
 		Kind:      domain.OutboxFollow,
@@ -270,11 +275,13 @@ func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, e
 	}); err != nil {
 		return domain.Peer{}, err
 	}
-	return peer, nil
+	return stored, nil
 }
 
 // RemovePeer leaves a peer instance: it queues the Undo of the stored follow,
-// drops the peer row and cascades every object mirrored from it.
+// drops the objects mirrored from the peer and only then the peer row. The
+// cascade runs before the row is removed so any mid-sequence failure keeps
+// the peer listed and the removal retryable.
 func (f *Federation) RemovePeer(ctx context.Context, id string) error {
 	peer, err := f.peers.ByID(ctx, id)
 	if err != nil {
@@ -293,10 +300,10 @@ func (f *Federation) RemovePeer(ctx context.Context, id string) error {
 	}); err != nil {
 		return err
 	}
-	if err := f.peers.Remove(ctx, id); err != nil {
+	if err := f.remoteObjects.DeleteByPeer(ctx, peer.ActorID); err != nil {
 		return err
 	}
-	return f.remoteObjects.DeleteByPeer(ctx, peer.ActorID)
+	return f.peers.Remove(ctx, id)
 }
 
 // Peers lists joined peer instances oldest first.

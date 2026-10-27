@@ -587,10 +587,24 @@ func (f *fakeInboxEvents) MarkAttempt(_ context.Context, id string, attempts int
 	return domain.ErrNotFound
 }
 
+// fakeCallLog records cross-repository call order when it is attached to
+// several fakes; methods stay no-ops while the field is nil.
+type fakeCallLog struct {
+	ops []string
+}
+
+func (l *fakeCallLog) record(op string) {
+	if l == nil {
+		return
+	}
+	l.ops = append(l.ops, op)
+}
+
 type fakePeers struct {
 	peers    []domain.Peer
 	removed  []string
 	accepted []string
+	log      *fakeCallLog
 }
 
 func newFakePeers() *fakePeers {
@@ -648,6 +662,7 @@ func (f *fakePeers) Remove(_ context.Context, id string) error {
 		if peer.ID == id {
 			f.peers = append(f.peers[:i], f.peers[i+1:]...)
 			f.removed = append(f.removed, id)
+			f.log.record("peers.Remove")
 			return nil
 		}
 	}
@@ -665,6 +680,7 @@ type fakeRemoteObjects struct {
 	puts         []domain.RemoteObject
 	deleted      []string
 	deletedPeers []string
+	log          *fakeCallLog
 }
 
 func newFakeRemoteObjects() *fakeRemoteObjects {
@@ -705,5 +721,6 @@ func (f *fakeRemoteObjects) DeleteByPeer(_ context.Context, peerActorID string) 
 	}
 	f.objects = kept
 	f.deletedPeers = append(f.deletedPeers, peerActorID)
+	f.log.record("remoteObjects.DeleteByPeer")
 	return nil
 }

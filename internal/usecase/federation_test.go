@@ -18,6 +18,9 @@ func newTestFederation() (*Federation, *fakeOutbox, *fakeFollowers, *fakeRemoteA
 	inbox := newFakeInboxEvents()
 	peers := newFakePeers()
 	remoteObjects := newFakeRemoteObjects()
+	callLog := &fakeCallLog{}
+	peers.log = callLog
+	remoteObjects.log = callLog
 	identity := NewIdentity(&fakeInstanceKeys{}, "https://catalog.example.com")
 	return NewFederation(outbox, followers, actors, inbox, identity, peers, remoteObjects), outbox, followers, actors, inbox, peers, remoteObjects
 }
@@ -321,10 +324,19 @@ func TestAddPeerRejoinResetsPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rejoin: %v", err)
 	}
+	if second.ID != first.ID {
+		t.Fatalf("rejoin returned id %q, want the stored id %q from the first join", second.ID, first.ID)
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("rejoin CreatedAt = %v, want the first join's %v", second.CreatedAt, first.CreatedAt)
+	}
 	if len(peers.peers) != 1 {
 		t.Fatalf("peers = %+v, want still one peer", peers.peers)
 	}
 	stored := peers.peers[0]
+	if stored != second {
+		t.Fatalf("returned peer %+v is not the stored row %+v", second, stored)
+	}
 	if stored.State != domain.PeerPending {
 		t.Fatalf("stored state = %q, want pending", stored.State)
 	}
@@ -339,8 +351,12 @@ func TestAddPeerRejoinResetsPending(t *testing.T) {
 			t.Fatalf("entry = %+v, want follow targeting the peer actor", entry)
 		}
 	}
-	if outbox.appended[1].ID != second.ID || outbox.appended[1].FollowID != second.FollowActivityID {
-		t.Fatalf("second entry = %+v, want id %q and follow id %q", outbox.appended[1], second.ID, second.FollowActivityID)
+	secondEntry := outbox.appended[1]
+	if secondEntry.FollowID != second.FollowActivityID {
+		t.Fatalf("second entry follow id = %q, want %q", secondEntry.FollowID, second.FollowActivityID)
+	}
+	if want := "https://catalog.example.com/ap/outbox/" + secondEntry.ID; secondEntry.FollowID != want {
+		t.Fatalf("second entry follow id = %q, want it derived from its own entry id %q", secondEntry.FollowID, want)
 	}
 }
 
@@ -381,12 +397,27 @@ func TestRemovePeerQueuesUndoAndCascades(t *testing.T) {
 	if len(remoteObjects.objects) != 0 {
 		t.Fatalf("remote objects = %+v, want cascaded away", remoteObjects.objects)
 	}
+	deleteIdx, removeIdx := -1, -1
+	for i, op := range peers.log.ops {
+		switch op {
+		case "remoteObjects.DeleteByPeer":
+			deleteIdx = i
+		case "peers.Remove":
+			removeIdx = i
+		}
+	}
+	if deleteIdx < 0 || removeIdx < 0 || deleteIdx > removeIdx {
+		t.Fatalf("ops = %v, want remoteObjects.DeleteByPeer before peers.Remove", peers.log.ops)
+	}
 
 	if err := federation.RemovePeer(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("unknown id error = %v, want ErrNotFound", err)
 	}
 	if len(outbox.appended) != 2 {
 		t.Fatalf("failed removal appended entries: %+v", outbox.appended)
+	}
+	if len(peers.log.ops) != 2 {
+		t.Fatalf("failed removal ran repo writes: %v", peers.log.ops)
 	}
 }
 
