@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"biblio-oggetto/internal/adapter/activitypub"
 	"biblio-oggetto/internal/adapter/filestore"
 	httpapi "biblio-oggetto/internal/adapter/http"
 	"biblio-oggetto/internal/adapter/sqlite"
@@ -108,24 +109,32 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
 	identity := usecase.NewIdentity(instanceKeyRepo, baseURL)
-	remoteActors := httpapi.NewRemoteActors()
+	remoteActors := activitypub.NewRemoteActors()
 	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity)
-	verifier := httpapi.NewSignatureVerifier(remoteKeyRepo, remoteActors)
-	handler := httpapi.New(auth, objects, categories, identity, federation, verifier, httpapi.Config{
+	verifier := activitypub.NewSignatureVerifier(remoteKeyRepo, remoteActors)
+
+	catalog := httpapi.New(auth, objects, categories, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,
 		UploadDir:    photos.Dir(),
-		BaseURL:      baseURL,
+	}).Handler()
+	federationHandler := activitypub.New(identity, federation, objects, verifier, activitypub.Config{
+		BaseURL: baseURL,
 	}).Handler()
 
-	deliverer := httpapi.NewDeliverer(federation, identity, cfg.FederationPoll)
-	processor := httpapi.NewInboxProcessor(federation, cfg.FederationPoll)
+	root := http.NewServeMux()
+	root.Handle("/ap/", federationHandler)
+	root.Handle("/.well-known/", federationHandler)
+	root.Handle("/", catalog)
+
+	deliverer := activitypub.NewDeliverer(federation, identity, cfg.FederationPoll)
+	processor := activitypub.NewInboxProcessor(federation, cfg.FederationPoll)
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	go deliverer.Run(workerCtx)
 	go processor.Run(workerCtx)
 
 	return &App{
 		DB:         db,
-		Handler:    handler,
+		Handler:    root,
 		Auth:       auth,
 		Objects:    objects,
 		Categories: categories,

@@ -220,6 +220,8 @@ cmd/server/             server and create-admin commands
 internal/domain/        dependency-free models, validation, sentinel errors
 internal/usecase/       business logic and outbound ports
 internal/adapter/http/  HTTP adapter, JSON/multipart handling, auth middleware
+internal/adapter/activitypub/ ActivityPub federation endpoints, delivery and inbox workers
+internal/httpx/         shared HTTP error envelope and panic recovery
 internal/adapter/spreadsheet/ XLSX and CSV import parsing
 internal/adapter/sqlite/ SQLite repositories and schema migrations
 internal/adapter/filestore/ local photo storage

@@ -1,18 +1,13 @@
-package httpapi
+package activitypub
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	"biblio-oggetto/internal/domain"
-)
-
-const (
-	activityJSONContentType = "application/activity+json"
-	jrdContentType          = "application/jrd+json"
+	"biblio-oggetto/internal/httpx"
 )
 
 type webfingerResponse struct {
@@ -44,21 +39,24 @@ type keyJSON struct {
 	PublicKeyPEM string `json:"publicKeyPem"`
 }
 
-var errNotFederationResource = fmt.Errorf("%w: federation resource not found", domain.ErrNotFound)
+var (
+	errNotFederationResource = fmt.Errorf("%w: federation resource not found", domain.ErrNotFound)
+	errMissingResource       = fmt.Errorf("%w: resource parameter is required", domain.ErrInvalid)
+)
 
 func (s *Server) webfinger(w http.ResponseWriter, r *http.Request) {
 	resource := r.URL.Query().Get("resource")
 	if resource == "" {
-		writeError(w, fmt.Errorf("%w: resource parameter is required", domain.ErrInvalid))
+		httpx.WriteError(w, errMissingResource)
 		return
 	}
 	acct, ok := strings.CutPrefix(strings.ToLower(resource), "acct:")
 	want := strings.ToLower(domain.InstanceActorHandle + "@" + s.federationHost)
 	if !ok || acct != want {
-		writeError(w, errNotFederationResource)
+		httpx.WriteError(w, errNotFederationResource)
 		return
 	}
-	actorID := strings.TrimRight(s.baseURL, "/") + "/ap/actors/" + domain.InstanceActorHandle
+	actorID := s.baseURL + "/ap/actors/" + domain.InstanceActorHandle
 	writeAPJSON(w, http.StatusOK, jrdContentType, webfingerResponse{
 		Subject: "acct:" + want,
 		Aliases: []string{actorID},
@@ -72,17 +70,17 @@ func (s *Server) webfinger(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) actor(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(r.PathValue("handle"), domain.InstanceActorHandle) {
-		writeError(w, errNotFederationResource)
+		httpx.WriteError(w, errNotFederationResource)
 		return
 	}
 	instanceActor, err := s.identity.Actor(r.Context())
 	if err != nil {
 		log.Printf("load instance actor: %v", err)
-		writeError(w, errInternal)
+		httpx.WriteError(w, errInternal)
 		return
 	}
 	writeAPJSON(w, http.StatusOK, activityJSONContentType, actorResponse{
-		Context:           []string{"https://www.w3.org/ns/activitystreams", "https://w3id.org/security/v1"},
+		Context:           []string{asNamespace, "https://w3id.org/security/v1"},
 		ID:                instanceActor.ID,
 		Type:              "Service",
 		Name:              instanceActor.Name,
@@ -95,12 +93,4 @@ func (s *Server) actor(w http.ResponseWriter, r *http.Request) {
 			PublicKeyPEM: instanceActor.PublicKeyPEM,
 		},
 	})
-}
-
-func writeAPJSON(w http.ResponseWriter, status int, contentType string, value any) {
-	w.Header().Set("Content-Type", contentType)
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		log.Printf("encode %s response: %v", contentType, err)
-	}
 }

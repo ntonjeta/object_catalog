@@ -32,7 +32,7 @@ announcements, and (later) request reservations through the inbox.
   `GET /ap/outbox/{id}`; `GET /ap/objects/{id}` serves the live `Article`.
 - `followers` table; `POST /ap/inbox` handles `Follow`/`Undo` and queues
   `Accept`.
-- Delivery: `httpapi.Deliverer` goroutine started in `internal/app`
+- Delivery: `activitypub.Deliverer` goroutine started in `internal/app`
   (`FederationPoll`, default 5 s), POSTs signed by `github.com/go-fed/httpsig`
   (rsa-sha256 over `(request-target) host date digest`), exponential backoff
   30 s → 30 min (`usecase.RetryDelay`). `GET /ap/outbox` responses themselves
@@ -41,7 +41,7 @@ announcements, and (later) request reservations through the inbox.
 
 ### PR 3 — Inbox security (done)
 
-- `httpapi.SignatureVerifier` validates draft-cavage signatures on
+- `activitypub.SignatureVerifier` validates draft-cavage signatures on
   `POST /ap/inbox`: rsa-sha256, signature must cover
   `(request-target) host date digest`, Date skew ≤ 12 h, `Digest` re-checked
   against the body; the remote public key is resolved from the key id
@@ -51,7 +51,7 @@ announcements, and (later) request reservations through the inbox.
   `unauthorized` (401), unparseable bodies `invalid_input` (400).
 - Verified payloads are queued in `inbox_events` (activity id = primary key;
   duplicates acknowledged and dropped) and drained asynchronously by
-  `httpapi.InboxProcessor` on the same poll interval. Follow/Undo reuse the
+  `activitypub.InboxProcessor` on the same poll interval. Follow/Undo reuse the
   Federation use case, unknown types are dropped after processing, failures
   retry with `usecase.RetryDelay`.
 

@@ -1,49 +1,32 @@
 package httpapi
 
 import (
-	"log"
 	"net/http"
-	"net/url"
-	"strings"
 
+	"biblio-oggetto/internal/httpx"
 	"biblio-oggetto/internal/usecase"
 )
 
 type Config struct {
 	CookieSecure bool
 	UploadDir    string
-	BaseURL      string
 }
 
 type Server struct {
-	auth           *usecase.Auth
-	objects        *usecase.Objects
-	categories     *usecase.Categories
-	identity       *usecase.Identity
-	federation     *usecase.Federation
-	verifier       *SignatureVerifier
-	cookieSecure   bool
-	uploadDir      string
-	baseURL        string
-	federationHost string
+	auth         *usecase.Auth
+	objects      *usecase.Objects
+	categories   *usecase.Categories
+	cookieSecure bool
+	uploadDir    string
 }
 
-func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, federation *usecase.Federation, verifier *SignatureVerifier, cfg Config) *Server {
-	federationHost := ""
-	if parsed, err := url.Parse(cfg.BaseURL); err == nil {
-		federationHost = strings.ToLower(parsed.Host)
-	}
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, cfg Config) *Server {
 	return &Server{
-		auth:           auth,
-		objects:        objects,
-		categories:     categories,
-		identity:       identity,
-		federation:     federation,
-		verifier:       verifier,
-		cookieSecure:   cfg.CookieSecure,
-		uploadDir:      cfg.UploadDir,
-		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),
-		federationHost: federationHost,
+		auth:         auth,
+		objects:      objects,
+		categories:   categories,
+		cookieSecure: cfg.CookieSecure,
+		uploadDir:    cfg.UploadDir,
 	}
 }
 
@@ -74,29 +57,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/objects/{id}/reservation", s.requireAuth(s.reserveObject))
 	mux.HandleFunc("DELETE /api/objects/{id}", s.requireAuth(s.deleteObject))
 
-	mux.HandleFunc("GET /.well-known/webfinger", s.webfinger)
-	mux.HandleFunc("GET /ap/actors/{handle}", s.actor)
-	mux.HandleFunc("POST /ap/inbox", s.inbox)
-	mux.HandleFunc("GET /ap/outbox", s.outbox)
-	mux.HandleFunc("GET /ap/outbox/{id}", s.outboxEntry)
-	mux.HandleFunc("GET /ap/objects/{id}", s.catalogObject)
-
 	s.registerStatic(mux)
 	mux.HandleFunc("/", s.notFound)
 
-	return s.recoverPanics(mux)
-}
-
-func (s *Server) recoverPanics(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				log.Printf("panic serving %s %s: %v", r.Method, r.URL.Path, recovered)
-				writeError(w, errInternal)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+	return httpx.RecoverPanics(mux)
 }
 
 func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {

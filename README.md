@@ -100,6 +100,8 @@ cmd/server/                 server and create-admin commands
 internal/domain/            models, validation, sentinel errors
 internal/usecase/           business logic and outbound ports
 internal/adapter/http/      HTTP adapter, JSON/multipart, auth middleware
+internal/adapter/activitypub/ ActivityPub federation adapter: actor, inbox/outbox, workers
+internal/httpx/             shared HTTP error envelope and panic recovery
 internal/adapter/sqlite/    SQLite repositories and schema migrations
 internal/adapter/spreadsheet/ XLSX and CSV import parsing
 internal/adapter/filestore/ local photo storage
