@@ -506,11 +506,14 @@ func equalRemoteObjects(a, b domain.RemoteObject) bool {
 	return a.CreatedAt.Equal(b.CreatedAt) && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
-// peerCreatePayload wraps an article object in a biblio-oggetto Create
-// activity announcing it under actor.
+// peerActivityPayload wraps an object in an ActivityPub activity.
+func peerActivityPayload(activityID, activityType, actor, object string) string {
+	return `{"@context":"https://www.w3.org/ns/activitystreams","id":"` + activityID + `","type":"` +
+		activityType + `","actor":"` + actor + `","object":` + object + `}`
+}
+
 func peerCreatePayload(actor, object string) string {
-	return `{"@context":"https://www.w3.org/ns/activitystreams","id":"https://peer.example/ap/outbox/a1","type":"Create","actor":"` +
-		actor + `","object":` + object + `}`
+	return peerActivityPayload("https://peer.example/ap/outbox/a1", "Create", actor, object)
 }
 
 // peerArticleObject is a minimal origin-valid Article object, extended with
@@ -632,10 +635,11 @@ func TestIngestUpdateAndDelete(t *testing.T) {
 	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
 	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
 
-	create := peerCreatePayload(testPeerActor, peerArticleObject(""))
-	update := peerCreatePayload(testPeerActor, peerArticleObject(`,"name":"Dune Messiah","content":"The spice must flow."`))
-	deleteActivity := `{"id":"https://peer.example/ap/outbox/d1","type":"Delete","actor":"` + testPeerActor +
-		`","object":{"id":"https://peer.example/ap/objects/obj-1","type":"Tombstone"}}`
+	create := peerActivityPayload("https://peer.example/ap/outbox/c1", "Create", testPeerActor, peerArticleObject(""))
+	update := peerActivityPayload("https://peer.example/ap/outbox/c2", "Update", testPeerActor,
+		peerArticleObject(`,"name":"Dune Messiah","content":"The spice must flow."`))
+	deleteActivity := peerActivityPayload("https://peer.example/ap/outbox/d1", "Delete", testPeerActor,
+		`{"id":"https://peer.example/ap/objects/obj-1","type":"Tombstone"}`)
 	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
 		ID: "https://peer.example/ap/outbox/c1", Type: "Create", Actor: testPeerActor,
 		ObjectID: "https://peer.example/ap/objects/obj-1", Payload: create,
@@ -680,6 +684,70 @@ func TestIngestUpdateAndDelete(t *testing.T) {
 		t.Fatalf("puts = %d, want no new mirrors from the Delete", len(remoteObjects.puts))
 	}
 	assertAllProcessed(t, inbox)
+}
+
+// R6: duplicate and retried Delete deliveries are normal ActivityPub traffic,
+// so a tombstone for an id that was never mirrored (or already removed) is a
+// known content failure: processed, never requeued.
+func TestIngestDeleteUnknownIDMarkedProcessed(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+
+	const missing = "https://peer.example/ap/objects/never-mirrored"
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/d9", Type: "Delete", Actor: testPeerActor,
+		ObjectID: missing,
+		Payload:  peerActivityPayload("https://peer.example/ap/outbox/d9", "Delete", testPeerActor, `{"id":"`+missing+`","type":"Tombstone"}`),
+	})
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	assertAllProcessed(t, inbox)
+	if inbox.events[0].Attempts != 0 {
+		t.Fatalf("attempts = %d, want no retry scheduled for an unknown-id delete", inbox.events[0].Attempts)
+	}
+	if len(remoteObjects.deleted) != 0 {
+		t.Fatalf("deleted = %v, want no removal recorded", remoteObjects.deleted)
+	}
+
+	// A second pass sees an empty queue: the event is done, not stuck.
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("second process: %v", err)
+	}
+	if inbox.events[0].Attempts != 0 {
+		t.Fatalf("attempts after second pass = %d, want still 0", inbox.events[0].Attempts)
+	}
+}
+
+// R7: ownership of a mirrored id belongs to its announcing peer. An accepted
+// peer may not tombstone rows mirrored from another origin.
+func TestIngestDeleteForeignOrigin(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	peerA := "https://peer-a.example/ap/actors/catalog"
+	peerB := "https://peer-b.example/ap/actors/catalog"
+	seedTestPeer(peers, peerA, domain.PeerAccepted)
+	seedTestPeer(peers, peerB, domain.PeerAccepted)
+	mine := "https://peer-b.example/ap/objects/keep-me"
+	remoteObjects.objects = append(remoteObjects.objects,
+		domain.RemoteObject{ID: mine, PeerActorID: peerB, Name: "Dune"})
+
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer-a.example/ap/outbox/d1", Type: "Delete", Actor: peerA,
+		ObjectID: mine,
+		Payload:  peerActivityPayload("https://peer-a.example/ap/outbox/d1", "Delete", peerA, `{"id":"`+mine+`","type":"Tombstone"}`),
+	})
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	assertAllProcessed(t, inbox)
+	if len(remoteObjects.deleted) != 0 || len(remoteObjects.objects) != 1 {
+		t.Fatalf("deleted = %v, stored = %+v, want peer B's mirror untouched",
+			remoteObjects.deleted, remoteObjects.objects)
+	}
 }
 
 func TestIngestIgnoresNonPeer(t *testing.T) {
@@ -812,16 +880,22 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 			t.Fatalf("object = %+v (ok %v), want Busy true with nil until", got, ok)
 		}
 	})
-	t.Run("availability unparseable expiry", func(t *testing.T) {
+	t.Run("availability unparseable expiry fails closed", func(t *testing.T) {
 		got, ok := availability("on loan until tomorrow")
-		if !ok || got.Busy || got.BusyUntil != nil {
-			t.Fatalf("object = %+v (ok %v), want unparseable to read as available", got, ok)
+		if !ok || !got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want an unreadable deadline to stay Busy with nil until", got, ok)
+		}
+	})
+	t.Run("availability missing timestamp fails closed", func(t *testing.T) {
+		got, ok := availability("on loan until ")
+		if !ok || !got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want a missing deadline to stay Busy with nil until", got, ok)
 		}
 	})
 	t.Run("availability garbage", func(t *testing.T) {
 		got, ok := availability("churned")
 		if !ok || got.Busy || got.BusyUntil != nil {
-			t.Fatalf("object = %+v (ok %v), want garbage to read as available", got, ok)
+			t.Fatalf("object = %+v (ok %v), want non-loan text to read as available", got, ok)
 		}
 	})
 
@@ -837,6 +911,25 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 		}
 		if len(got.Tags) != 20 {
 			t.Fatalf("tags = %v, want the first 20", got.Tags)
+		}
+	})
+	t.Run("tag cap counts unique tags", func(t *testing.T) {
+		parts := make([]string, 0, 30)
+		for i := 0; i < 10; i++ {
+			parts = append(parts, `{"type":"Tag","name":"#dupe"}`)
+		}
+		for i := 0; i < 20; i++ {
+			parts = append(parts, fmt.Sprintf(`{"type":"Tag","name":"#tag%02d"}`, i))
+		}
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
+			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor)
+		if !ok {
+			t.Fatal("article dropped for repeated tags, want truncation")
+		}
+		// Duplicates fold before the cap: the 20 kept tags are dupe + tag00..tag18,
+		// not 10 duplicates crowding out 19 unique numbered tags.
+		if len(got.Tags) != 20 || got.Tags[0] != "dupe" || got.Tags[1] != "tag00" || got.Tags[19] != "tag18" {
+			t.Fatalf("tags = %v, want dupe followed by tag00..tag18", got.Tags)
 		}
 	})
 }

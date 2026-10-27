@@ -191,10 +191,11 @@ func urlOrigin(raw string) (string, bool) {
 }
 
 // parseAvailability maps the Availability attachment onto the mirrored busy
-// state. "on loan" keeps the object busy without an expiry; "on loan until
-// <RFC3339>" is parsed best-effort; anything else — including an unparseable
-// expiry — reads as available, so a malformed announcement cannot pin the
-// mirror busy forever.
+// state. "on loan" keeps the object busy without an expiry; the
+// "on loan until " prefix fails closed — an unparseable or missing timestamp
+// still reports Busy with a nil expiry, because under-reporting a loan would
+// show a lent-out item as free. Anything without the loan wording reads as
+// available.
 func parseAvailability(content string) (bool, *time.Time) {
 	if content == availabilityOnLoan {
 		return true, nil
@@ -205,23 +206,39 @@ func parseAvailability(content string) (bool, *time.Time) {
 	}
 	until, err := time.Parse(time.RFC3339, strings.TrimSpace(expiry))
 	if err != nil {
-		return false, nil
+		return true, nil
 	}
 	utc := until.UTC()
 	return true, &utc
 }
 
-// normalizeIngestTags clamps the tag list to the domain caps before calling
-// domain.NormalizeTags, so an oversized announcement truncates instead of
-// erroring. If normalization still fails the tags are dropped entirely.
+// normalizeIngestTags clamps a peer's tag list to the domain caps before
+// domain.NormalizeTags runs. Deduplication happens first so the 20-tag cap
+// counts unique tags — duplicates early in the list must not crowd out new
+// tags past position 20. Per-tag length truncation keeps NormalizeTags from
+// ever erroring; if it somehow does, the tags are dropped entirely rather
+// than failing the ingest.
 func normalizeIngestTags(tags []string) []string {
-	if len(tags) > maxRemoteTags {
-		tags = tags[:maxRemoteTags]
+	seen := make(map[string]struct{}, len(tags))
+	unique := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		key := strings.ToLower(strings.TrimSpace(tag))
+		if key == "" {
+			continue
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, tag)
 	}
-	for i, tag := range tags {
-		tags[i] = truncateRunes(tag, maxRemoteTagLength)
+	if len(unique) > maxRemoteTags {
+		unique = unique[:maxRemoteTags]
 	}
-	normalized, err := domain.NormalizeTags(tags)
+	for i, tag := range unique {
+		unique[i] = truncateRunes(tag, maxRemoteTagLength)
+	}
+	normalized, err := domain.NormalizeTags(unique)
 	if err != nil || len(normalized) == 0 {
 		return nil
 	}

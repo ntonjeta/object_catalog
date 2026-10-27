@@ -141,11 +141,25 @@ func (f *Federation) processInboxEvent(ctx context.Context, event domain.InboxEv
 			log.Printf("federation: dropping delete without object id from %q", event.Actor)
 			return nil
 		}
+		// Ownership of a mirrored id belongs to its announcing peer: a
+		// same-scheme delete naming another origin's object is dropped, not
+		// applied, so one accepted peer cannot tombstone another's rows.
+		if !sameOrigin(event.ObjectID, event.Actor) {
+			log.Printf("federation: peer delete rejected for foreign origin %q", event.ObjectID)
+			return nil
+		}
 		accepted, err := f.isAcceptedPeer(ctx, event.Actor)
 		if err != nil || !accepted {
 			return err
 		}
-		return f.remoteObjects.Delete(ctx, event.ObjectID)
+		// Duplicate and retried Delete deliveries are normal ActivityPub
+		// traffic, so a tombstone for an id that was never mirrored (or is
+		// already gone) is a known content failure: ErrNotFound drops to nil
+		// and the event is marked processed instead of requeued forever.
+		if err := f.remoteObjects.Delete(ctx, event.ObjectID); err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		return nil
 	default:
 		return nil
 	}
