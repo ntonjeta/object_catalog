@@ -514,6 +514,12 @@ func (f *fakeRemoteActors) FetchActor(_ context.Context, actorID string) (domain
 	return actor, nil
 }
 
+// Resolve mirrors the adapter port: the fake has no WebFinger, so fixture
+// input is treated as a direct actor id.
+func (f *fakeRemoteActors) Resolve(ctx context.Context, input string) (domain.RemoteActor, error) {
+	return f.FetchActor(ctx, input)
+}
+
 type fakeInboxEvents struct {
 	events []domain.InboxEvent
 	addErr error

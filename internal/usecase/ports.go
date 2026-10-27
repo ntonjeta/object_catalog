@@ -99,8 +99,11 @@ type InboxEventRepository interface {
 }
 
 // RemoteActorRepository resolves a remote actor id to its document (inbox).
+// Resolve accepts the admin join input: "handle@host", "acct:handle@host"
+// (via WebFinger) or a direct actor URL.
 type RemoteActorRepository interface {
 	FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error)
+	Resolve(ctx context.Context, input string) (domain.RemoteActor, error)
 }
 
 // PeerRepository stores the peer instances this instance follows. Upsert keys

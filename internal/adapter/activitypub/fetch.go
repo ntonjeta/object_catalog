@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -42,6 +43,78 @@ func (r *RemoteActors) FetchActor(ctx context.Context, actorID string) (domain.R
 		return domain.RemoteActor{}, fmt.Errorf("actor %q: %w", actorID, err)
 	}
 	return domain.RemoteActor{ID: document.ID, InboxURL: document.Inbox}, nil
+}
+
+const jrdJSONContentType = "application/jrd+json"
+
+// handlePattern matches "user@host" or "acct:user@host". Colons and slashes
+// are excluded from the user so scheme-ful inputs (mailto:, https://) never
+// match; the host may contain a port ("127.0.0.1:8080").
+var handlePattern = regexp.MustCompile(`^(?:acct:)?([^:@/\s]+)@([^@\s/]+)$`)
+
+// Resolve turns admin join input — "handle@host", "acct:handle@host" or a
+// direct actor URL — into the remote actor document. Handles resolve through
+// WebFinger to the rel=self actor id first.
+func (r *RemoteActors) Resolve(ctx context.Context, input string) (domain.RemoteActor, error) {
+	target := strings.TrimSpace(input)
+	if match := handlePattern.FindStringSubmatch(target); match != nil {
+		actorID, err := r.webfingerSelfURL(ctx, match[1]+"@"+match[2])
+		if err != nil {
+			return domain.RemoteActor{}, err
+		}
+		return r.FetchActor(ctx, actorID)
+	}
+	if parsed, err := url.Parse(target); err == nil && parsed.Host != "" &&
+		(parsed.Scheme == "http" || parsed.Scheme == "https") {
+		return r.FetchActor(ctx, target)
+	}
+	return domain.RemoteActor{}, fmt.Errorf("%w: target must be an actor URL or handle@host", domain.ErrInvalid)
+}
+
+// webfingerSelfURL performs RFC 7033 WebFinger for "user@host" and returns
+// the href of the first rel=self link. Hosts starting with "localhost" or
+// "127." are probed over plain http so local test instances join without
+// TLS; everything else requires https.
+func (r *RemoteActors) webfingerSelfURL(ctx context.Context, userAndHost string) (string, error) {
+	host := userAndHost[strings.IndexByte(userAndHost, '@')+1:]
+	scheme := "https"
+	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.") {
+		scheme = "http"
+	}
+	endpoint := fmt.Sprintf("%s://%s/.well-known/webfinger?resource=%s",
+		scheme, host, url.QueryEscape("acct:"+userAndHost))
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: webfinger target %q: %v", domain.ErrInvalid, userAndHost, err)
+	}
+	request.Header.Set("Accept", jrdJSONContentType)
+	response, err := r.client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("webfinger for %q: %w", userAndHost, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("webfinger for %q: status %d: %w", userAndHost, response.StatusCode, domain.ErrNotFound)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("webfinger for %q: %w", userAndHost, err)
+	}
+	var jrd struct {
+		Links []struct {
+			Rel  string `json:"rel"`
+			Href string `json:"href"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(body, &jrd); err != nil {
+		return "", fmt.Errorf("decode webfinger for %q: %w", userAndHost, err)
+	}
+	for _, link := range jrd.Links {
+		if link.Rel == "self" && link.Href != "" {
+			return link.Href, nil
+		}
+	}
+	return "", fmt.Errorf("webfinger for %q: no self link: %w", userAndHost, domain.ErrNotFound)
 }
 
 func validateAbsoluteHTTPURL(raw string) error {
