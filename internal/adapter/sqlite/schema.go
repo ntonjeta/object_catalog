@@ -90,4 +90,22 @@ var schema = []string{
 		inbox_url TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS inbox_events (
+		id TEXT PRIMARY KEY,
+		sender TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL,
+		actor TEXT NOT NULL DEFAULT '',
+		object_id TEXT NOT NULL DEFAULT '',
+		payload TEXT NOT NULL,
+		received_at TEXT NOT NULL,
+		processed_at TEXT,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS inbox_events_pending_idx ON inbox_events(processed_at, next_attempt_at)`,
+	`CREATE TABLE IF NOT EXISTS remote_keys (
+		key_id TEXT PRIMARY KEY,
+		public_pem TEXT NOT NULL,
+		fetched_at TEXT NOT NULL
+	)`,
 }

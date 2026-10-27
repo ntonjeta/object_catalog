@@ -200,8 +200,8 @@ func TestInboxFollowAndOutboxDelivery(t *testing.T) {
 	targetActor := target.baseURL + "/ap/actors/catalog"
 	followerActor := follower.baseURL + "/ap/actors/catalog"
 
-	// Follow the target instance actor.
-	response, data := target.do(follower.anonymous, http.MethodPost, "/ap/inbox", map[string]any{
+	// Follow the target instance actor, signed with the follower key.
+	response, data := follower.signedInboxPost(target, map[string]any{
 		"type":   "Follow",
 		"id":     follower.baseURL + "/ap/outbox/follow-1",
 		"actor":  followerActor,
@@ -209,10 +209,12 @@ func TestInboxFollowAndOutboxDelivery(t *testing.T) {
 	})
 	assertStatus(t, response, http.StatusAccepted, data)
 
-	followers, err := target.app.Federation.Followers(ctx)
-	if err != nil || len(followers) != 1 {
-		t.Fatalf("followers = (%+v, %v), want one", followers, err)
-	}
+	followers := []domain.Follower(nil)
+	follower.eventually("target records the follower", func() bool {
+		var err error
+		followers, err = target.app.Federation.Followers(ctx)
+		return err == nil && len(followers) == 1
+	})
 	if followers[0].ActorID != followerActor || followers[0].InboxURL != follower.baseURL+"/ap/inbox" {
 		t.Fatalf("follower = %+v", followers[0])
 	}
@@ -222,22 +224,22 @@ func TestInboxFollowAndOutboxDelivery(t *testing.T) {
 	target.login()
 	created := target.createObject(map[string]any{"name": "Dune"})
 
-	entries, _, err := target.app.Federation.Outbox(ctx, 0, 0)
-	if err != nil {
-		t.Fatalf("outbox list: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("entries = %d, want accept + create", len(entries))
-	}
 	var createID string
-	for _, entry := range entries {
-		if entry.Kind == domain.OutboxCreate && entry.Object.ID == created.ID {
-			createID = entry.ID
+	follower.eventually("create entry queued", func() bool {
+		entries, _, err := target.app.Federation.Outbox(ctx, 0, 0)
+		if err != nil {
+			return false
 		}
-	}
-	if createID == "" {
-		t.Fatalf("no create entry for %s: %+v", created.ID, entries)
-	}
+		if len(entries) != 2 {
+			return false
+		}
+		for _, entry := range entries {
+			if entry.Kind == domain.OutboxCreate && entry.Object.ID == created.ID {
+				createID = entry.ID
+			}
+		}
+		return createID != ""
+	})
 
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -255,26 +257,117 @@ func TestInboxFollowAndOutboxDelivery(t *testing.T) {
 	}
 
 	// Undo removes the follower.
-	response, data = target.do(follower.anonymous, http.MethodPost, "/ap/inbox", map[string]any{
+	response, data = follower.signedInboxPost(target, map[string]any{
 		"type":   "Undo",
 		"id":     follower.baseURL + "/ap/outbox/undo-1",
 		"actor":  followerActor,
 		"object": targetActor,
 	})
 	assertStatus(t, response, http.StatusAccepted, data)
-	followers, err = target.app.Federation.Followers(ctx)
+	target.eventually("follower removed", func() bool {
+		stored, err := target.app.Federation.Followers(ctx)
+		return err == nil && len(stored) == 0
+	})
+}
+
+func TestInboxRejectsUnsigned(t *testing.T) {
+	target := newEnv(t)
+	follower := newEnv(t)
+
+	response, data := target.do(follower.anonymous, http.MethodPost, "/ap/inbox", map[string]any{
+		"type":   "Follow",
+		"id":     follower.baseURL + "/ap/outbox/follow-1",
+		"actor":  follower.baseURL + "/ap/actors/catalog",
+		"object": target.baseURL + "/ap/actors/catalog",
+	})
+	assertStatus(t, response, http.StatusUnauthorized, data)
+	assertErrorCode(t, data, "unauthorized")
+
+	followers, err := target.app.Federation.Followers(context.Background())
 	if err != nil || len(followers) != 0 {
-		t.Fatalf("followers after undo = (%+v, %v), want none", followers, err)
+		t.Fatalf("followers = (%+v, %v), want none", followers, err)
 	}
+}
+
+func TestInboxRejectsTamperedBody(t *testing.T) {
+	target := newEnv(t)
+	follower := newEnv(t)
+
+	body, err := json.Marshal(map[string]any{
+		"type":   "Follow",
+		"id":     follower.baseURL + "/ap/outbox/follow-1",
+		"actor":  follower.baseURL + "/ap/actors/catalog",
+		"object": target.baseURL + "/ap/actors/catalog",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	response, data := follower.signedInboxPostRaw(target, body, true)
+	assertStatus(t, response, http.StatusUnauthorized, data)
+	assertErrorCode(t, data, "unauthorized")
+}
+
+func TestInboxRejectsSignerActorMismatch(t *testing.T) {
+	target := newEnv(t)
+	follower := newEnv(t)
+
+	response, data := follower.signedInboxPost(target, map[string]any{
+		"type":   "Follow",
+		"id":     follower.baseURL + "/ap/outbox/follow-1",
+		"actor":  "https://victim.example/actors/someone",
+		"object": target.baseURL + "/ap/actors/catalog",
+	})
+	assertStatus(t, response, http.StatusUnauthorized, data)
+	assertErrorCode(t, data, "unauthorized")
+}
+
+func TestInboxDeduplicatesActivityIds(t *testing.T) {
+	target := newEnv(t)
+	follower := newEnv(t)
+	ctx := context.Background()
+
+	activity := map[string]any{
+		"type":   "Follow",
+		"id":     follower.baseURL + "/ap/outbox/follow-1",
+		"actor":  follower.baseURL + "/ap/actors/catalog",
+		"object": target.baseURL + "/ap/actors/catalog",
+	}
+	response, data := follower.signedInboxPost(target, activity)
+	assertStatus(t, response, http.StatusAccepted, data)
+	response, data = follower.signedInboxPost(target, activity)
+	assertStatus(t, response, http.StatusAccepted, data)
+
+	total := -1
+	follower.eventually("exactly one accept queued", func() bool {
+		_, count, err := target.app.Federation.Outbox(ctx, 0, 0)
+		if err != nil {
+			return false
+		}
+		total = count
+		return count == 1
+	})
+	if total != 1 {
+		t.Fatalf("outbox total = %d, want 1", total)
+	}
+}
+
+func TestInboxRejectsSignedButUnparseableBody(t *testing.T) {
+	target := newEnv(t)
+	follower := newEnv(t)
+
+	response, data := follower.signedInboxPostRaw(target, []byte(`{"type":`), false)
+	assertStatus(t, response, http.StatusBadRequest, data)
+	assertErrorCode(t, data, "invalid_input")
 }
 
 func TestInboxIgnoresForeignTarget(t *testing.T) {
 	e := newEnv(t)
+	follower := newEnv(t)
 
-	response, data := e.do(e.anonymous, http.MethodPost, "/ap/inbox", map[string]any{
+	response, data := follower.signedInboxPost(e, map[string]any{
 		"type":   "Follow",
 		"id":     "https://remote.example/follows/1",
-		"actor":  "https://remote.example/alice",
+		"actor":  follower.baseURL + "/ap/actors/catalog",
 		"object": "https://other.example/actors/someone",
 	})
 	assertStatus(t, response, http.StatusAccepted, data)
@@ -283,22 +376,6 @@ func TestInboxIgnoresForeignTarget(t *testing.T) {
 	if err != nil || len(followers) != 0 {
 		t.Fatalf("followers = (%+v, %v), want none", followers, err)
 	}
-}
-
-func TestInboxRejectsInvalidBody(t *testing.T) {
-	e := newEnv(t)
-
-	response, data := e.doRaw(e.anonymous, http.MethodPost, "/ap/inbox", []byte(`{"type":`))
-	assertStatus(t, response, http.StatusBadRequest, data)
-	assertErrorCode(t, data, "invalid_input")
-
-	response, data = e.do(e.anonymous, http.MethodPost, "/ap/inbox", map[string]any{
-		"type":   "Follow",
-		"actor":  "not-a-url",
-		"object": e.baseURL + "/ap/actors/catalog",
-	})
-	assertStatus(t, response, http.StatusBadRequest, data)
-	assertErrorCode(t, data, "invalid_input")
 }
 
 func containsStringLocal(values []string, want string) bool {

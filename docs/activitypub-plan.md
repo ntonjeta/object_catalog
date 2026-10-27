@@ -11,7 +11,7 @@ announcements, and (later) request reservations through the inbox.
 
 ## Phases
 
-### PR 1 — ADR + discovery slice (this change)
+### PR 1 — ADR + discovery slice (done)
 
 - ADR-0002 records the federation decisions.
 - `BASE_URL` env config, validated fail-fast in `app.New`.
@@ -38,11 +38,21 @@ announcements, and (later) request reservations through the inbox.
   30 s → 30 min. `GET /ap/outbox` responses themselves are unsigned: peers
   fetch them publicly; signing applies to outbound requests only.
 
-### PR 3 — Inbox security
+### PR 3 — Inbox security (done)
 
-- `POST /ap/inbox`: HTTP signature verification (`github.com/go-fed/httpsig`)
-  against fetched remote keys, activity-ID dedupe table, async queue,
-  unknown activity types answered 202 and dropped.
+- `httpapi.SignatureVerifier` validates draft-cavage signatures on
+  `POST /ap/inbox`: rsa-sha256, signature must cover
+  `(request-target) host date digest`, Date skew ≤ 12 h, `Digest` re-checked
+  against the body; the remote public key is resolved from the key id
+  document (actor or standalone key) and cached in `remote_keys`. Cache hits
+  are force-refetched once on verification failure (key rotation).
+- Signer must equal the activity `actor` field; verification failure is
+  `unauthorized` (401), unparseable bodies `invalid_input` (400).
+- Verified payloads are queued in `inbox_events` (activity id = primary key;
+  duplicates acknowledged and dropped) and drained asynchronously by
+  `httpapi.InboxProcessor` on the same poll interval. Follow/Undo reuse the
+  Federation use case, unknown types are dropped after processing, failures
+  retry with `usecase.RetryDelay`.
 
 ### PR 4 — Reservation over federation
 

@@ -310,3 +310,80 @@ func TestFollowerRepoUpsertAndRemove(t *testing.T) {
 		t.Fatalf("second remove error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestInboxRepoPendingAndMarks(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := NewInboxRepo(db)
+
+	now := time.Now().UTC()
+	event := domain.InboxEvent{
+		ID: "https://remote.example/f/1", Sender: "alice", Type: "Follow",
+		Actor: "alice", ObjectID: "self", Payload: "{}", ReceivedAt: now,
+	}
+	if err := repo.Add(ctx, event); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := repo.Add(ctx, event); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("duplicate add error = %v, want ErrConflict", err)
+	}
+	pending, err := repo.Pending(ctx, now, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = (%v, %v), want one", pending, err)
+	}
+	if pending[0].Payload != "{}" || pending[0].Type != "Follow" {
+		t.Fatalf("pending entry = %+v", pending[0])
+	}
+
+	if err := repo.MarkAttempt(ctx, event.ID, 1, now.Add(time.Hour)); err != nil {
+		t.Fatalf("mark attempt: %v", err)
+	}
+	pending, err = repo.Pending(ctx, now, 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending after backoff = (%v, %v), want none", pending, err)
+	}
+	pending, err = repo.Pending(ctx, now.Add(time.Hour), 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending after window = (%v, %v), want one", pending, err)
+	}
+
+	if err := repo.MarkProcessed(ctx, event.ID, now); err != nil {
+		t.Fatalf("mark processed: %v", err)
+	}
+	pending, err = repo.Pending(ctx, now.Add(time.Hour), 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending after processed = (%v, %v), want none", pending, err)
+	}
+	if err := repo.MarkProcessed(ctx, "missing", now); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing processed error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRemoteKeyRepoGetPut(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := NewRemoteKeyRepo(db)
+
+	if _, err := repo.Get(ctx, "key-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("get missing error = %v, want ErrNotFound", err)
+	}
+	now := time.Now().UTC()
+	if err := repo.Put(ctx, "key-1", "pem-one", now); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := repo.Put(ctx, "key-1", "pem-two", now); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	pem, err := repo.Get(ctx, "key-1")
+	if err != nil || pem != "pem-two" {
+		t.Fatalf("get = (%q, %v), want pem-two", pem, err)
+	}
+}

@@ -21,13 +21,14 @@ type Server struct {
 	categories     *usecase.Categories
 	identity       *usecase.Identity
 	federation     *usecase.Federation
+	verifier       *SignatureVerifier
 	cookieSecure   bool
 	uploadDir      string
 	baseURL        string
 	federationHost string
 }
 
-func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, federation *usecase.Federation, cfg Config) *Server {
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, federation *usecase.Federation, verifier *SignatureVerifier, cfg Config) *Server {
 	federationHost := ""
 	if parsed, err := url.Parse(cfg.BaseURL); err == nil {
 		federationHost = strings.ToLower(parsed.Host)
@@ -38,6 +39,7 @@ func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categ
 		categories:     categories,
 		identity:       identity,
 		federation:     federation,
+		verifier:       verifier,
 		cookieSecure:   cfg.CookieSecure,
 		uploadDir:      cfg.UploadDir,
 		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),

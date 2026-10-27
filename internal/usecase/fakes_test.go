@@ -513,3 +513,56 @@ func (f *fakeRemoteActors) FetchActor(_ context.Context, actorID string) (domain
 	}
 	return actor, nil
 }
+
+type fakeInboxEvents struct {
+	events []domain.InboxEvent
+	addErr error
+}
+
+func newFakeInboxEvents() *fakeInboxEvents {
+	return &fakeInboxEvents{}
+}
+
+func (f *fakeInboxEvents) Add(_ context.Context, event domain.InboxEvent) error {
+	if f.addErr != nil {
+		return f.addErr
+	}
+	for _, existing := range f.events {
+		if existing.ID == event.ID {
+			return domain.ErrConflict
+		}
+	}
+	f.events = append(f.events, event)
+	return nil
+}
+
+func (f *fakeInboxEvents) Pending(_ context.Context, now time.Time, _ int) ([]domain.InboxEvent, error) {
+	pending := make([]domain.InboxEvent, 0)
+	for _, event := range f.events {
+		if event.ProcessedAt == nil && !event.NextAttemptAt.After(now) {
+			pending = append(pending, event)
+		}
+	}
+	return pending, nil
+}
+
+func (f *fakeInboxEvents) MarkProcessed(_ context.Context, id string, at time.Time) error {
+	for i, event := range f.events {
+		if event.ID == id {
+			f.events[i].ProcessedAt = &at
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeInboxEvents) MarkAttempt(_ context.Context, id string, attempts int, nextAttemptAt time.Time) error {
+	for i, event := range f.events {
+		if event.ID == id {
+			f.events[i].Attempts = attempts
+			f.events[i].NextAttemptAt = nextAttemptAt
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}

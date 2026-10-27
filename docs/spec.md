@@ -187,11 +187,16 @@ The instance federates as a single ActivityStreams `Service` actor (handle
 - `GET /ap/actors/{handle}` serves the actor document as
   `application/activity+json` with a `publicKey` (PKIX PEM). Unknown handles
   return `not_found`.
-- `POST /ap/inbox` accepts `Follow`/`Undo` targeting the instance actor
-  (resolving the remote actor document for its inbox), queues an `Accept`,
-  and acknowledges all other activity types with `202` without processing.
-  Responses are empty bodies; invalid JSON or actors return `invalid_input`.
-  Requests are not yet signature-verified (PR 3).
+- `POST /ap/inbox` verifies draft-cavage HTTP signatures (rsa-sha256 over
+  `(request-target) host date digest`, Date skew ≤ 12 h, body digest
+  re-checked, remote public keys cached in `remote_keys` with a refetch-on-
+  failure rotation retry). The signer must equal the activity `actor`.
+  Verified activities are deduplicated by id and queued in `inbox_events`
+  for asynchronous processing: `Follow`/`Undo` targeting the instance actor
+  update the follower list (`Follow` also queues the `Accept`); unknown
+  types and foreign targets are dropped after processing. Verification
+  failure returns `unauthorized`, unparseable bodies `invalid_input`,
+  anything acknowledged returns `202` with an empty body.
 - `GET /ap/outbox` serves an `OrderedCollection` of published activities
   (newest first, default 50, max 100 via `limit`/`offset` query parameters);
   `GET /ap/outbox/{id}` serves a single activity.
@@ -242,6 +247,13 @@ e2e/                    end-to-end HTTP tests
   `position`, `file_name` (the bare stored file name, never a URL).
 - `instance_keys` — single-row (`id = 1`) PKCS#8 PEM private signing key for
   the federation actor.
+- `outbox` — pending/undelivered federation activities with delivery
+  bookkeeping (`delivered_at`, `attempts`, `next_attempt_at`) and the object
+  snapshot at activity time.
+- `followers` — remote actor ids and their inbox URLs.
+- `inbox_events` — verified incoming activities deduplicated by activity id;
+  processed asynchronously with the same retry bookkeeping as `outbox`.
+- `remote_keys` — cached remote public keys by signature key id.
 
 Constraints:
 
@@ -284,7 +296,7 @@ Constraints:
 | `DELETE` | `/api/objects/{id}` | admin |
 | `GET` | `/.well-known/webfinger` | public |
 | `GET` | `/ap/actors/{handle}` | public |
-| `POST` | `/ap/inbox` | public (unsigned until PR 3) |
+| `POST` | `/ap/inbox` | public (signature-verified) |
 | `GET` | `/ap/outbox` | public |
 | `GET` | `/ap/outbox/{id}` | public |
 | `GET` | `/ap/objects/{id}` | public |

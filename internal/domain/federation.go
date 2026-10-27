@@ -39,3 +39,18 @@ type RemoteActor struct {
 	ID       string
 	InboxURL string
 }
+
+// InboxEvent is a signature-verified incoming activity awaiting processing.
+// The raw payload is kept for audit; the parsed fields drive processing.
+type InboxEvent struct {
+	ID            string
+	Sender        string
+	Type          string
+	Actor         string
+	ObjectID      string
+	Payload       string
+	ReceivedAt    time.Time
+	ProcessedAt   *time.Time
+	Attempts      int
+	NextAttemptAt time.Time
+}

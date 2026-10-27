@@ -91,6 +91,13 @@ type FollowerRepository interface {
 	List(ctx context.Context) ([]domain.Follower, error)
 }
 
+type InboxEventRepository interface {
+	Add(ctx context.Context, event domain.InboxEvent) error
+	Pending(ctx context.Context, now time.Time, limit int) ([]domain.InboxEvent, error)
+	MarkProcessed(ctx context.Context, id string, at time.Time) error
+	MarkAttempt(ctx context.Context, id string, attempts int, nextAttemptAt time.Time) error
+}
+
 // RemoteActorRepository resolves a remote actor id to its document (inbox).
 type RemoteActorRepository interface {
 	FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error)

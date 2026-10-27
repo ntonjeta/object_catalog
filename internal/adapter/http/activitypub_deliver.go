@@ -17,8 +17,6 @@ import (
 
 const (
 	deliveryTimeout = 10 * time.Second
-	backoffBase     = 30 * time.Second
-	backoffCap      = 30 * time.Minute
 )
 
 // Deliverer polls the federation outbox and POSTS pending activities to
@@ -122,7 +120,7 @@ func (d *Deliverer) process(ctx context.Context) {
 
 func (d *Deliverer) fail(ctx context.Context, entry domain.OutboxEntry, now time.Time) {
 	attempts := entry.Attempts + 1
-	if err := d.federation.MarkAttempt(ctx, entry.ID, attempts, now.Add(backoff(attempts))); err != nil {
+	if err := d.federation.MarkAttempt(ctx, entry.ID, attempts, now.Add(usecase.RetryDelay(attempts))); err != nil {
 		log.Printf("federation: record attempt %s: %v", entry.ID, err)
 	}
 }
@@ -148,18 +146,4 @@ func (d *Deliverer) post(ctx context.Context, signer httpsig.Signer, privateKey 
 		return fmt.Errorf("inbox %s answered %s", follower.InboxURL, response.Status)
 	}
 	return nil
-}
-
-func backoff(attempts int) time.Duration {
-	delay := backoffBase
-	for i := 1; i < attempts; i++ {
-		delay *= 2
-		if delay >= backoffCap {
-			return backoffCap
-		}
-	}
-	if delay > backoffCap {
-		return backoffCap
-	}
-	return delay
 }

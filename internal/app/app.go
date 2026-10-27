@@ -101,21 +101,27 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	instanceKeyRepo := sqlite.NewInstanceKeyRepo(db)
 	outboxRepo := sqlite.NewOutboxRepo(db)
 	followerRepo := sqlite.NewFollowerRepo(db)
+	inboxRepo := sqlite.NewInboxRepo(db)
+	remoteKeyRepo := sqlite.NewRemoteKeyRepo(db)
 
 	auth := usecase.NewAuth(users, sessions, cfg.SessionTTL)
 	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
 	identity := usecase.NewIdentity(instanceKeyRepo, baseURL)
-	federation := usecase.NewFederation(outboxRepo, followerRepo, httpapi.NewRemoteActors(), identity)
-	handler := httpapi.New(auth, objects, categories, identity, federation, httpapi.Config{
+	remoteActors := httpapi.NewRemoteActors()
+	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity)
+	verifier := httpapi.NewSignatureVerifier(remoteKeyRepo, remoteActors)
+	handler := httpapi.New(auth, objects, categories, identity, federation, verifier, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,
 		UploadDir:    photos.Dir(),
 		BaseURL:      baseURL,
 	}).Handler()
 
 	deliverer := httpapi.NewDeliverer(federation, identity, cfg.FederationPoll)
+	processor := httpapi.NewInboxProcessor(federation, cfg.FederationPoll)
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	go deliverer.Run(workerCtx)
+	go processor.Run(workerCtx)
 
 	return &App{
 		DB:         db,

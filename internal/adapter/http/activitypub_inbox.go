@@ -3,75 +3,50 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 
 	"biblio-oggetto/internal/domain"
-	"biblio-oggetto/internal/usecase"
 )
 
 func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
-	var activity struct {
-		ID     string          `json:"id"`
-		Type   string          `json:"type"`
-		Actor  string          `json:"actor"`
-		Object json.RawMessage `json:"object"`
-	}
-	if !decodeJSON(w, r, &activity) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeError(w, errInternal)
 		return
 	}
-	objectID := activityObjectID(activity.Object)
 
-	switch activity.Type {
-	case "Follow":
-		targeted, err := s.targetsSelf(r, objectID)
-		if err != nil {
-			writeError(w, errInternal)
-			return
-		}
-		if !targeted {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		if err := s.federation.Follow(r.Context(), usecase.FollowRequest{
-			ActivityID: activity.ID,
-			ActorID:    activity.Actor,
-			ObjectID:   objectID,
-		}); err != nil {
-			if errors.Is(err, domain.ErrInvalid) {
-				writeError(w, err)
-			} else {
-				writeError(w, errInternal)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	case "Undo":
-		targeted, err := s.targetsSelf(r, objectID)
-		if err != nil {
-			writeError(w, errInternal)
-			return
-		}
-		if !targeted {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-		if err := s.federation.Unfollow(r.Context(), usecase.FollowRequest{
-			ActivityID: activity.ID,
-			ActorID:    activity.Actor,
-			ObjectID:   objectID,
-		}); err != nil {
-			if errors.Is(err, domain.ErrInvalid) {
-				writeError(w, err)
-			} else {
-				writeError(w, errInternal)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	default:
-		// Unhandled activity types are acknowledged and dropped.
-		w.WriteHeader(http.StatusAccepted)
+	signer, err := s.verifier.Verify(r, body)
+	if err != nil {
+		log.Printf("federation: inbox rejected: %v", err)
+		writeError(w, fmt.Errorf("%w: signature verification failed", domain.ErrUnauthorized))
+		return
 	}
+
+	var activity struct {
+		Actor string `json:"actor"`
+	}
+	if err := json.Unmarshal(body, &activity); err == nil && activity.Actor != "" && activity.Actor != signer {
+		writeError(w, fmt.Errorf("%w: signer does not match activity actor", domain.ErrUnauthorized))
+		return
+	}
+
+	if err := s.federation.EnqueueActivity(r.Context(), signer, body); err != nil {
+		switch {
+		case errors.Is(err, domain.ErrConflict):
+			// Duplicate activity id: acknowledge without reprocessing.
+			w.WriteHeader(http.StatusAccepted)
+		case errors.Is(err, domain.ErrInvalid):
+			writeError(w, err)
+		default:
+			log.Printf("federation: inbox enqueue: %v", err)
+			writeError(w, errInternal)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) outbox(w http.ResponseWriter, r *http.Request) {
@@ -143,29 +118,4 @@ func (s *Server) catalogObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPJSON(w, http.StatusOK, activityJSONContentType, articleDoc(s.baseURL, object))
-}
-
-func (s *Server) targetsSelf(r *http.Request, objectID string) (bool, error) {
-	actorID, err := s.federation.ActorID(r.Context())
-	if err != nil {
-		return false, err
-	}
-	return objectID != "" && objectID == actorID, nil
-}
-
-func activityObjectID(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		return asString
-	}
-	var asObject struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(raw, &asObject); err == nil {
-		return asObject.ID
-	}
-	return ""
 }
