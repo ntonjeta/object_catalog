@@ -37,8 +37,10 @@ type Object struct {
 	Category    *Category
 	Tags        []string
 	Reservation *Reservation
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Source is the peer actor id for mirrored remote objects; empty for local.
+	Source    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // IsBusyAt reports whether the object is on loan at the given time. An object

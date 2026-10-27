@@ -108,6 +108,50 @@ func TestMarshalActivityAccept(t *testing.T) {
 	}
 }
 
+func TestMarshalActivityFollow(t *testing.T) {
+	entry := domain.OutboxEntry{
+		ID:        "e1",
+		Kind:      domain.OutboxFollow,
+		Target:    "https://peer.example/ap/actors/catalog",
+		Published: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
+	}
+	assertFollowShape(t, entry, "Follow")
+}
+
+func TestMarshalActivityUndo(t *testing.T) {
+	entry := domain.OutboxEntry{
+		ID:        "e1",
+		Kind:      domain.OutboxUndo,
+		Target:    "https://peer.example/ap/actors/catalog",
+		Published: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
+	}
+	assertFollowShape(t, entry, "Undo")
+}
+
+func assertFollowShape(t *testing.T, entry domain.OutboxEntry, wantType string) {
+	t.Helper()
+	body, err := marshalActivity(entry, "https://us.example/ap/actors/catalog", "https://us.example")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var activity map[string]any
+	if err := json.Unmarshal(body, &activity); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if activity["type"] != wantType {
+		t.Fatalf("type = %v, want %s", activity["type"], wantType)
+	}
+	if activity["actor"] != "https://us.example/ap/actors/catalog" {
+		t.Fatalf("actor = %v", activity["actor"])
+	}
+	if activity["object"] != entry.Target {
+		t.Fatalf("object = %#v, want bare string %q", activity["object"], entry.Target)
+	}
+	if activity["id"] != "https://us.example/ap/outbox/e1" {
+		t.Fatalf("id = %v", activity["id"])
+	}
+}
+
 func TestArticleBusyAvailability(t *testing.T) {
 	until := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	article := articleDoc("https://catalog.example.com", domain.Object{
