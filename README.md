@@ -125,8 +125,11 @@ upload directory. No third-party services are required.
 
 ## Documentation
 
+- [User guide: federation](docs/users/federation.md)
 - [Specification](docs/spec.md)
 - [ADR-0001: Single-admin catalog with public reads](docs/adr/0001-single-admin-catalog-and-public-reads.md)
+- [ADR-0002: ActivityPub federation with peer instances](docs/adr/0002-federation.md)
+- [ADR-0003: Federation adapter split](docs/adr/0003-federation-adapter-split.md)
 
 ## Contributing
 

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-27
+- Amended: item 6 superseded by [ADR-0003: Federation adapter split](0003-federation-adapter-split.md)
 
 ## Context
 
@@ -33,11 +34,8 @@ Go: no CGO, no build step, SQLite via `modernc.org/sqlite`.
    (single row, id = 1), created on first use, never regenerated implicitly.
 6. **Hexagonal placement.** Key storage is an `InstanceKeyRepository` port in
    `usecase/ports.go`; the `Identity` use case owns generation/derivation.
-   The entire ActivityPub surface (actor, WebFinger, inbox/outbox handlers,
-   JSON-LD serialization, signature verification, delivery/processing
-   workers) lives in its own adapter, `internal/adapter/activitypub`, which
-   depends on use cases only. Both HTTP adapters share the error envelope
-   and panic recovery through `internal/httpx`.
+   AP JSON-LD serialization is transport detail and lives in
+   `internal/adapter/http`.
 7. **Deferred.** Remote reservations over the inbox (PR 4). Inbox signature
    verification (PR 3) and outbox delivery with followers (PR 2) are
    implemented; `Follow`/`Undo`/`Accept` are the only verified inbound types

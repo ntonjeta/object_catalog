@@ -1,7 +1,9 @@
 # ActivityPub Federation Plan
 
 Status: PR 1–3 done, PR 4 deferred (to be tackled later)  
-Decision record: [ADR-0002: ActivityPub federation with peer instances](adr/0002-federation.md)
+Decision records: [ADR-0002: ActivityPub federation with peer instances](adr/0002-federation.md),
+[ADR-0003: Federation adapter split](adr/0003-federation-adapter-split.md)  
+User guide: [docs/users/federation.md](users/federation.md)
 
 ## Goal
 

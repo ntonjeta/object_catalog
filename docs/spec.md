@@ -173,7 +173,9 @@ There is no frontend build step and no external CDN dependency.
 
 The instance federates as a single ActivityStreams `Service` actor (handle
 `catalog`, `domain.InstanceActorHandle`). Catalog objects are not actors. See
-[ADR-0002](adr/0002-federation.md) and the staged plan in
+the [user guide](users/federation.md), the decision records
+[ADR-0002](adr/0002-federation.md) /
+[ADR-0003](adr/0003-federation-adapter-split.md), and the staged plan in
 [activitypub-plan.md](activitypub-plan.md).
 
 - `BASE_URL` is required and validated at startup; all federated identifiers
