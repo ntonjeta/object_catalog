@@ -259,8 +259,15 @@ func (f *Federation) Unfollow(ctx context.Context, req FollowRequest) error {
 	return nil
 }
 
+// Followers lists remote actors following this instance.
 func (f *Federation) Followers(ctx context.Context) ([]domain.Follower, error) {
 	return f.followers.List(ctx)
+}
+
+// FetchActor resolves a remote actor document. The Deliverer uses it to find
+// the current inbox of a follow or undo entry's target.
+func (f *Federation) FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error) {
+	return f.actors.FetchActor(ctx, actorID)
 }
 
 // AddPeer joins a remote catalog instance: it resolves the handle or actor

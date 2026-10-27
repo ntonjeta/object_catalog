@@ -19,9 +19,10 @@ const (
 	deliveryTimeout = 10 * time.Second
 )
 
-// Deliverer polls the federation outbox and POSTS pending activities to
-// follower inboxes with HTTP signatures. One goroutine, started by the
-// composition root.
+// Deliverer polls the federation outbox and POSTS pending activities with
+// HTTP signatures: broadcasts to follower inboxes, follow and undo entries
+// to their target peer's inbox. One goroutine, started by the composition
+// root.
 type Deliverer struct {
 	federation *usecase.Federation
 	identity   *usecase.Identity
@@ -93,6 +94,27 @@ func (d *Deliverer) process(ctx context.Context) {
 		if err != nil {
 			log.Printf("federation: encode entry %s: %v", entry.ID, err)
 			d.fail(ctx, entry, now)
+			continue
+		}
+		// A follow or undo addresses exactly one instance: its target peer.
+		// Never let the zero-follower fast path consume these entries — an
+		// instance with no followers must still be able to join peers.
+		if entry.Kind == domain.OutboxFollow || entry.Kind == domain.OutboxUndo {
+			target, err := d.federation.FetchActor(ctx, entry.Target)
+			if err != nil {
+				log.Printf("federation: resolve target %s for entry %s: %v", entry.Target, entry.ID, err)
+				d.fail(ctx, entry, now)
+				continue
+			}
+			follower := domain.Follower{ActorID: target.ID, InboxURL: target.InboxURL}
+			if err := d.post(ctx, signer, privateKey, keyID, follower, body); err != nil {
+				log.Printf("federation: deliver %s to %s: %v", entry.ID, follower.ActorID, err)
+				d.fail(ctx, entry, now)
+				continue
+			}
+			if err := d.federation.MarkDelivered(ctx, entry.ID, now); err != nil {
+				log.Printf("federation: mark delivered %s: %v", entry.ID, err)
+			}
 			continue
 		}
 		if len(followers) == 0 {
