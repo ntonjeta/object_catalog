@@ -102,3 +102,25 @@ type InboxEventRepository interface {
 type RemoteActorRepository interface {
 	FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error)
 }
+
+// PeerRepository stores the peer instances this instance follows. Upsert keys
+// on the peer actor id: a re-join refreshes the inbox URL, the follow activity
+// id and the state (back to pending) while keeping the original created time.
+type PeerRepository interface {
+	Upsert(ctx context.Context, peer domain.Peer) error
+	MarkAccepted(ctx context.Context, actorID string) error
+	ByFollowActivityID(ctx context.Context, followActivityID string) (domain.Peer, error)
+	ByID(ctx context.Context, id string) (domain.Peer, error)
+	Remove(ctx context.Context, id string) error
+	List(ctx context.Context) ([]domain.Peer, error)
+}
+
+// RemoteObjectRepository mirrors objects announced by joined peers. Put
+// replaces the row and its tags for the given object id.
+type RemoteObjectRepository interface {
+	Put(ctx context.Context, object domain.RemoteObject) error
+	Delete(ctx context.Context, id string) error
+	// DeleteByPeer drops every object mirrored from one peer. It succeeds
+	// even when the peer has mirrored nothing.
+	DeleteByPeer(ctx context.Context, peerActorID string) error
+}

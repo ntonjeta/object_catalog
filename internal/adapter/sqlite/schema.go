@@ -108,4 +108,31 @@ var schema = []string{
 		public_pem TEXT NOT NULL,
 		fetched_at TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS peers (
+		id TEXT PRIMARY KEY,
+		actor_id TEXT NOT NULL UNIQUE,
+		inbox_url TEXT NOT NULL,
+		follow_activity_id TEXT NOT NULL UNIQUE,
+		state TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS remote_objects (
+		id TEXT PRIMARY KEY,
+		peer_actor_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		image_url TEXT NOT NULL DEFAULT '',
+		busy INTEGER NOT NULL DEFAULT 0,
+		busy_until TEXT,
+		category_name TEXT NOT NULL DEFAULT '',
+		published_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS remote_objects_peer_actor_id_idx ON remote_objects(peer_actor_id)`,
+	`CREATE TABLE IF NOT EXISTS remote_object_tags (
+		object_id TEXT NOT NULL REFERENCES remote_objects(id) ON DELETE CASCADE,
+		tag TEXT NOT NULL,
+		PRIMARY KEY (object_id, tag)
+	)`,
+	`CREATE INDEX IF NOT EXISTS remote_object_tags_tag_idx ON remote_object_tags(tag)`,
 }

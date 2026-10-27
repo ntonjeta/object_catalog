@@ -387,3 +387,288 @@ func TestRemoteKeyRepoGetPut(t *testing.T) {
 		t.Fatalf("get = (%q, %v), want pem-two", pem, err)
 	}
 }
+
+// openDB opens a migrated catalog database in the test's temporary directory
+// and closes it when the test finishes.
+func openDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
+	return db
+}
+
+func TestPeerRepoUpsertAndStates(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	repo := NewPeerRepo(db)
+
+	joined := time.Now().UTC()
+	peer := domain.Peer{
+		ID:               "peer-1",
+		ActorID:          "https://remote.example/ap/actor",
+		InboxURL:         "https://remote.example/ap/inbox/one",
+		FollowActivityID: "https://us/ap/outbox/one",
+		State:            domain.PeerPending,
+		CreatedAt:        joined,
+	}
+	if err := repo.Upsert(ctx, peer); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	stored, err := repo.ByID(ctx, "peer-1")
+	if err != nil || stored.State != domain.PeerPending {
+		t.Fatalf("ByID after insert = (%+v, %v), want pending", stored, err)
+	}
+
+	if err := repo.MarkAccepted(ctx, peer.ActorID); err != nil {
+		t.Fatalf("MarkAccepted: %v", err)
+	}
+	stored, err = repo.ByID(ctx, "peer-1")
+	if err != nil || stored.State != domain.PeerAccepted {
+		t.Fatalf("ByID after accept = (%+v, %v), want accepted", stored, err)
+	}
+
+	if err := repo.MarkAccepted(ctx, "https://nowhere.example/ap/actor"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("MarkAccepted unknown error = %v, want ErrNotFound", err)
+	}
+
+	// Re-join resets the state to pending and refreshes inbox and follow
+	// activity id while keeping the original created_at.
+	rejoined := peer
+	rejoined.InboxURL = "https://remote.example/ap/inbox/two"
+	rejoined.FollowActivityID = "https://us/ap/outbox/x"
+	rejoined.CreatedAt = joined.Add(time.Hour)
+	if err := repo.Upsert(ctx, rejoined); err != nil {
+		t.Fatalf("re-join upsert: %v", err)
+	}
+	stored, err = repo.ByID(ctx, "peer-1")
+	if err != nil {
+		t.Fatalf("ByID after re-join: %v", err)
+	}
+	if stored.State != domain.PeerPending {
+		t.Fatalf("state = %q, want pending reset", stored.State)
+	}
+	if stored.FollowActivityID != "https://us/ap/outbox/x" || stored.InboxURL != "https://remote.example/ap/inbox/two" {
+		t.Fatalf("refreshed = %+v, want new follow id and inbox", stored)
+	}
+	if !stored.CreatedAt.Equal(joined) {
+		t.Fatalf("created_at = %v, want original %v", stored.CreatedAt, joined)
+	}
+
+	found, err := repo.ByFollowActivityID(ctx, "https://us/ap/outbox/x")
+	if err != nil || found.ID != "peer-1" {
+		t.Fatalf("ByFollowActivityID = (%+v, %v), want peer-1", found, err)
+	}
+	if _, err := repo.ByFollowActivityID(ctx, "https://us/ap/outbox/missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown activity error = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.ByID(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown id error = %v, want ErrNotFound", err)
+	}
+
+	later := domain.Peer{
+		ID:               "peer-2",
+		ActorID:          "https://other.example/ap/actor",
+		InboxURL:         "https://other.example/ap/inbox",
+		FollowActivityID: "https://us/ap/outbox/two",
+		State:            domain.PeerAccepted,
+		CreatedAt:        joined.Add(2 * time.Hour),
+	}
+	if err := repo.Upsert(ctx, later); err != nil {
+		t.Fatalf("upsert second peer: %v", err)
+	}
+	peers, err := repo.List(ctx)
+	if err != nil || len(peers) != 2 {
+		t.Fatalf("List = (%v, %v), want two peers", peers, err)
+	}
+	if peers[0].ID != "peer-1" || peers[1].ID != "peer-2" {
+		t.Fatalf("List order = (%q, %q), want oldest first", peers[0].ID, peers[1].ID)
+	}
+
+	if err := repo.Remove(ctx, "peer-1"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if err := repo.Remove(ctx, "peer-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second Remove error = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.ByID(ctx, "peer-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ByID after remove error = %v, want ErrNotFound", err)
+	}
+	peers, err = repo.List(ctx)
+	if err != nil || len(peers) != 1 {
+		t.Fatalf("List after remove = (%v, %v), want one peer", peers, err)
+	}
+}
+
+func TestRemoteObjectRepoPutUpserts(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	repo := NewRemoteObjectRepo(db)
+
+	now := time.Now().UTC()
+	until := now.Add(time.Hour)
+	object := domain.RemoteObject{
+		ID:           "https://remote.example/ap/objects/1",
+		PeerActorID:  "https://remote.example/ap/actor",
+		Name:         "Dune",
+		Description:  "desert planet",
+		ImageURL:     "https://remote.example/img/dune.png",
+		CategoryName: "Sci-Fi",
+		Busy:         true,
+		BusyUntil:    &until,
+		Tags:         []string{"scifi", "classic"},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := repo.Put(ctx, object); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	updated := object
+	updated.Name = "Dune Messiah"
+	updated.Description = ""
+	updated.ImageURL = ""
+	updated.CategoryName = ""
+	updated.Busy = false
+	updated.BusyUntil = nil
+	updated.Tags = []string{"scifi"}
+	updated.CreatedAt = now.Add(-time.Hour)
+	updated.UpdatedAt = now.Add(time.Hour)
+	if err := repo.Put(ctx, updated); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_objects`).Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count = %d, want one row after upsert", count)
+	}
+
+	var (
+		name         string
+		description  string
+		imageURL     string
+		categoryName string
+		busy         int
+		busyUntil    sql.NullString
+		publishedAt  string
+		updatedAt    string
+	)
+	if err := db.QueryRowContext(ctx,
+		`SELECT name, description, image_url, category_name, busy, busy_until, published_at, updated_at
+		 FROM remote_objects WHERE id = ?`, object.ID,
+	).Scan(&name, &description, &imageURL, &categoryName, &busy, &busyUntil, &publishedAt, &updatedAt); err != nil {
+		t.Fatalf("query row: %v", err)
+	}
+	if name != "Dune Messiah" {
+		t.Fatalf("name = %q, want second put to win", name)
+	}
+	if busy != 0 || busyUntil.Valid {
+		t.Fatalf("busy = (%d, %v), want reset to false/NULL", busy, busyUntil)
+	}
+	if publishedAt != formatTime(updated.CreatedAt) || updatedAt != formatTime(updated.UpdatedAt) {
+		t.Fatalf("timestamps = (%q, %q), want (%q, %q)", publishedAt, updatedAt,
+			formatTime(updated.CreatedAt), formatTime(updated.UpdatedAt))
+	}
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT tag FROM remote_object_tags WHERE object_id = ? ORDER BY tag`, object.ID)
+	if err != nil {
+		t.Fatalf("query tags: %v", err)
+	}
+	defer rows.Close()
+	tags := make([]string, 0)
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			t.Fatalf("scan tag: %v", err)
+		}
+		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tags: %v", err)
+	}
+	if len(tags) != 1 || tags[0] != "scifi" {
+		t.Fatalf("tags = %v, want replaced by second put", tags)
+	}
+}
+
+func TestRemoteObjectRepoDeleteByPeer(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	repo := NewRemoteObjectRepo(db)
+
+	now := time.Now().UTC()
+	first := domain.RemoteObject{
+		ID:          "https://a.example/ap/objects/1",
+		PeerActorID: "https://a.example/ap/actor",
+		Name:        "A One",
+		Tags:        []string{"a"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	second := first
+	second.ID = "https://a.example/ap/objects/2"
+	second.Name = "A Two"
+	third := domain.RemoteObject{
+		ID:          "https://b.example/ap/objects/1",
+		PeerActorID: "https://b.example/ap/actor",
+		Name:        "B One",
+		Tags:        []string{"b"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	for _, object := range []domain.RemoteObject{first, second, third} {
+		if err := repo.Put(ctx, object); err != nil {
+			t.Fatalf("put %s: %v", object.ID, err)
+		}
+	}
+
+	if err := repo.DeleteByPeer(ctx, "https://a.example/ap/actor"); err != nil {
+		t.Fatalf("DeleteByPeer: %v", err)
+	}
+
+	var remaining int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM remote_objects WHERE peer_actor_id = ?`, "https://a.example/ap/actor").
+		Scan(&remaining); err != nil {
+		t.Fatalf("count a rows: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("peer a rows = %d, want 0", remaining)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM remote_objects WHERE peer_actor_id = ?`, "https://b.example/ap/actor").
+		Scan(&remaining); err != nil {
+		t.Fatalf("count b rows: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("peer b rows = %d, want 1 untouched", remaining)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_object_tags`).Scan(&remaining); err != nil {
+		t.Fatalf("count tags: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("tag rows = %d, want cascade deleted a's tags", remaining)
+	}
+
+	// Deleting an unknown peer removes nothing but is not an error.
+	if err := repo.DeleteByPeer(ctx, "https://c.example/ap/actor"); err != nil {
+		t.Fatalf("DeleteByPeer unknown = %v, want nil", err)
+	}
+
+	if err := repo.Delete(ctx, third.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := repo.Delete(ctx, third.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second Delete error = %v, want ErrNotFound", err)
+	}
+}
