@@ -3,6 +3,8 @@ package httpapi
 import (
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"biblio-oggetto/internal/usecase"
 )
@@ -10,23 +12,34 @@ import (
 type Config struct {
 	CookieSecure bool
 	UploadDir    string
+	BaseURL      string
 }
 
 type Server struct {
-	auth         *usecase.Auth
-	objects      *usecase.Objects
-	categories   *usecase.Categories
-	cookieSecure bool
-	uploadDir    string
+	auth           *usecase.Auth
+	objects        *usecase.Objects
+	categories     *usecase.Categories
+	identity       *usecase.Identity
+	cookieSecure   bool
+	uploadDir      string
+	baseURL        string
+	federationHost string
 }
 
-func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, cfg Config) *Server {
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, cfg Config) *Server {
+	federationHost := ""
+	if parsed, err := url.Parse(cfg.BaseURL); err == nil {
+		federationHost = strings.ToLower(parsed.Host)
+	}
 	return &Server{
-		auth:         auth,
-		objects:      objects,
-		categories:   categories,
-		cookieSecure: cfg.CookieSecure,
-		uploadDir:    cfg.UploadDir,
+		auth:           auth,
+		objects:        objects,
+		categories:     categories,
+		identity:       identity,
+		cookieSecure:   cfg.CookieSecure,
+		uploadDir:      cfg.UploadDir,
+		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),
+		federationHost: federationHost,
 	}
 }
 
@@ -56,6 +69,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/objects/{id}/images/{imageId}", s.requireAuth(s.deleteObjectImage))
 	mux.HandleFunc("PATCH /api/objects/{id}/reservation", s.requireAuth(s.reserveObject))
 	mux.HandleFunc("DELETE /api/objects/{id}", s.requireAuth(s.deleteObject))
+
+	mux.HandleFunc("GET /.well-known/webfinger", s.webfinger)
+	mux.HandleFunc("GET /ap/actors/{handle}", s.actor)
 
 	s.registerStatic(mux)
 	mux.HandleFunc("/", s.notFound)

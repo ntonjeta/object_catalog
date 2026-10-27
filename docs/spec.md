@@ -169,6 +169,28 @@ The embedded frontend provides:
 
 There is no frontend build step and no external CDN dependency.
 
+### Federation (ActivityPub)
+
+The instance federates as a single ActivityStreams `Service` actor (handle
+`catalog`, `domain.InstanceActorHandle`). Catalog objects are not actors. See
+[ADR-0002](adr/0002-federation.md) and the staged plan in
+[activitypub-plan.md](activitypub-plan.md).
+
+- `BASE_URL` is required and validated at startup; all federated identifiers
+  derive from it.
+- An RSA-2048 signing key is generated on first actor request, stored as a
+  PKCS#8 PEM in `instance_keys`, and never regenerated implicitly.
+- `GET /.well-known/webfinger?resource=acct:catalog@<host>` (RFC 7033,
+  `application/jrd+json`) resolves the handle case-insensitively to the actor.
+  Unknown resources return `not_found`; a missing `resource` returns
+  `invalid_input`.
+- `GET /ap/actors/{handle}` serves the actor document as
+  `application/activity+json` with a `publicKey` (PKIX PEM). Unknown handles
+  return `not_found`.
+- The actor advertises `/ap/inbox` and `/ap/outbox`; those endpoints are
+  implemented in later federation phases and currently return `not_found`.
+- Federation endpoints are public reads; no session is required.
+
 ## Code structure
 
 Strict Hexagonal architecture:
@@ -203,6 +225,8 @@ e2e/                    end-to-end HTTP tests
 - `object_tags` — composite primary key `(object_id, tag)`.
 - `object_images` — ordered images per object: random `id`, `object_id`,
   `position`, `file_name` (the bare stored file name, never a URL).
+- `instance_keys` — single-row (`id = 1`) PKCS#8 PEM private signing key for
+  the federation actor.
 
 Constraints:
 
@@ -243,6 +267,8 @@ Constraints:
 | `PATCH` | `/api/objects/{id}/images/order` | admin |
 | `DELETE` | `/api/objects/{id}/images/{imageId}` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
+| `GET` | `/.well-known/webfinger` | public |
+| `GET` | `/ap/actors/{handle}` | public |
 
 Object create/update accept both JSON and `multipart/form-data`. Multipart
 fields are `name`, `description`, `category_id`, `tags` (comma-separated), and
@@ -301,13 +327,14 @@ Codes: `invalid_input` (400), `unauthorized` (401), `not_found` (404),
 | `UPLOAD_DIR` | `./static` | Root for uploaded photos |
 | `SESSION_TTL` | `24h` | Session lifetime |
 | `COOKIE_SECURE` | `false` | Set the session cookie `Secure` flag |
+| `BASE_URL` | — | Canonical public origin of this instance; required (federation) |
 | `ADMIN_PASSWORD` | — | Required only by `create-admin` |
 
 Commands:
 
 ```bash
-ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
-go run ./cmd/server
+BASE_URL='http://localhost:8080' ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
+BASE_URL='http://localhost:8080' go run ./cmd/server
 ```
 
 ## Testing
@@ -322,6 +349,8 @@ upload/serve/replace/remove/delete, multi-image upload/serve/reorder/remove
 marking/release/expiry, reservations, CSV/XLSX
   import, partial import failures, and legacy schema migration.
 - Third-party services are not used; none need mocks.
+- Federation discovery (WebFinger matching, actor document, signing-key
+  persistence and reuse) is covered by use-case unit tests and E2E tests.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test
   verifies login, category CRUD, photo upload, thumbnails, search, edit/remove,
   delete, and logout.

@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	adminEmail    = "admin@example.com"
-	adminPassword = "password123"
+	adminEmail         = "admin@example.com"
+	adminPassword      = "password123"
+	federationBaseURL  = "https://catalog.example.com"
+	federationAcctHost = "catalog.example.com"
 )
 
 type env struct {
@@ -102,6 +104,7 @@ func newEnv(t *testing.T) *env {
 		DBPath:     filepath.Join(t.TempDir(), "catalog.db"),
 		SessionTTL: time.Hour,
 		UploadDir:  uploadRoot,
+		BaseURL:    federationBaseURL,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)

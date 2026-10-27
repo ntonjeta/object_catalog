@@ -27,10 +27,10 @@ Dependencies are pure Go; CGO is not required.
 
 ```bash
 # 1. create the administrator account
-ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
+BASE_URL='http://localhost:8080' ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
 
 # 2. run the server
-go run ./cmd/server
+BASE_URL='http://localhost:8080' go run ./cmd/server
 ```
 
 The server listens on `:8080` by default. Open <http://localhost:8080>,
@@ -52,9 +52,13 @@ go build -o server ./cmd/server
 | `UPLOAD_DIR` | `./static` | Root for uploaded photos |
 | `SESSION_TTL` | `24h` | Session lifetime |
 | `COOKIE_SECURE` | `false` | Set the session cookie `Secure` flag |
+| `BASE_URL` | — | Canonical public origin of this instance; required (federation) |
 | `ADMIN_PASSWORD` | — | Required only by `create-admin` |
 
-Set `COOKIE_SECURE=true` when serving over HTTPS.
+Set `COOKIE_SECURE=true` when serving over HTTPS. `BASE_URL` is the absolute
+`http(s)` origin peers use to reach this instance; it seeds the ActivityPub
+actor, WebFinger, and all future federated identifiers. Use `https://` for
+real deployments.
 
 ## HTTP API
 

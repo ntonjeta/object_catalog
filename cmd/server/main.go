@@ -122,6 +122,7 @@ func configFromEnv() (app.Config, error) {
 		SessionTTL:   24 * time.Hour,
 		CookieSecure: false,
 		UploadDir:    envOrDefault("UPLOAD_DIR", "./static"),
+		BaseURL:      os.Getenv("BASE_URL"),
 	}
 	if raw := os.Getenv("SESSION_TTL"); raw != "" {
 		ttl, err := time.ParseDuration(raw)

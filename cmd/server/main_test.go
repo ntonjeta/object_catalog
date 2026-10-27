@@ -8,6 +8,7 @@ import (
 func TestRunCreateAdmin(t *testing.T) {
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "catalog.db"))
 	t.Setenv("UPLOAD_DIR", t.TempDir())
+	t.Setenv("BASE_URL", "https://catalog.example.com")
 	t.Setenv("ADMIN_PASSWORD", "password123")
 
 	if err := run([]string{"create-admin", "-email", "admin@example.com"}); err != nil {
@@ -29,6 +30,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SESSION_TTL", "2h")
 	t.Setenv("COOKIE_SECURE", "true")
 	t.Setenv("UPLOAD_DIR", "custom-static")
+	t.Setenv("BASE_URL", "https://catalog.example.com")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -36,6 +38,9 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 	if cfg.DBPath != "custom.db" || cfg.CookieSecure != true || cfg.SessionTTL.String() != "2h0m0s" || cfg.UploadDir != "custom-static" {
 		t.Fatalf("config = %+v", cfg)
+	}
+	if cfg.BaseURL != "https://catalog.example.com" {
+		t.Fatalf("base url = %q", cfg.BaseURL)
 	}
 
 	t.Setenv("SESSION_TTL", "bad")

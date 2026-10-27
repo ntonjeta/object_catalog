@@ -373,3 +373,31 @@ func (f *fakeActivities) Create(_ context.Context, activity domain.Activity) err
 func (f *fakeActivities) List(_ context.Context, _ ActivityFilter) ([]domain.Activity, int, error) {
 	return f.activities, len(f.activities), nil
 }
+
+type fakeInstanceKeys struct {
+	key     domain.InstanceKey
+	stored  bool
+	race    bool
+	raceKey domain.InstanceKey
+}
+
+func (f *fakeInstanceKeys) Create(_ context.Context, key domain.InstanceKey) error {
+	if f.stored {
+		return domain.ErrConflict
+	}
+	if f.race {
+		f.key = f.raceKey
+		f.stored = true
+		return domain.ErrConflict
+	}
+	f.key = key
+	f.stored = true
+	return nil
+}
+
+func (f *fakeInstanceKeys) Get(_ context.Context) (domain.InstanceKey, error) {
+	if !f.stored {
+		return domain.InstanceKey{}, domain.ErrNotFound
+	}
+	return f.key, nil
+}

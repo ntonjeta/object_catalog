@@ -67,3 +67,8 @@ type ObjectRepository interface {
 	Images(ctx context.Context, objectID string) ([]domain.ObjectImage, error)
 	ReplaceImages(ctx context.Context, objectID string, images []domain.ObjectImage) error
 }
+
+type InstanceKeyRepository interface {
+	Create(ctx context.Context, key domain.InstanceKey) error
+	Get(ctx context.Context) (domain.InstanceKey, error)
+}
