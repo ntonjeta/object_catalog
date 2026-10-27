@@ -17,10 +17,10 @@ const (
 )
 
 type Object struct {
-	ID           string
-	Name         string
-	Description  string
-	ImagePath    string
+	ID          string
+	Name        string
+	Description string
+	ImagePath   string
 	Busy        bool
 	BusyUntil   *time.Time
 	Category    *Category

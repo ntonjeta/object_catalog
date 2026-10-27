@@ -48,9 +48,17 @@ busyDialog: document.getElementById("busy-dialog"),
     busyDialogTitle: document.getElementById("busy-dialog-title"),
     busyObjectId: document.getElementById("busy-object-id"),
     busyUntil: document.getElementById("busy-until"),
-    busyFrom: document.getElementById("busy-from"),
     busyError: document.getElementById("busy-error"),
     busySave: document.getElementById("busy-save"),
+    reserveDialog: document.getElementById("reserve-dialog"),
+    reserveForm: document.getElementById("reserve-form"),
+    reserveDialogTitle: document.getElementById("reserve-dialog-title"),
+    reserveObjectId: document.getElementById("reserve-object-id"),
+    reserveFrom: document.getElementById("reserve-from"),
+    reserveUntil: document.getElementById("reserve-until"),
+    reserveError: document.getElementById("reserve-error"),
+    reserveSave: document.getElementById("reserve-save"),
+    reservationsList: document.getElementById("reservations-list"),
     importDialog: document.getElementById("import-dialog"),
     importForm: document.getElementById("import-form"),
     importFile: document.getElementById("import-file"),
@@ -195,6 +203,7 @@ busyDialog: document.getElementById("busy-dialog"),
     closeDialog(elements.loginDialog);
     closeDialog(elements.objectDialog);
     closeDialog(elements.busyDialog);
+    closeDialog(elements.reserveDialog);
     closeDialog(elements.categoryDialog);
     closeDialog(elements.importDialog);
   }
@@ -362,7 +371,8 @@ busyDialog: document.getElementById("busy-dialog"),
     }
 
     for (const object of state.objects) {
-      const card = el("article", "object-card");
+      const reserved = !object.busy && object.reserved_from;
+      const card = el("article", reserved ? "object-card object-card-reserved" : "object-card");
 
       const top = el("div", "card-top");
       top.append(el("h3", "", object.name));
@@ -375,7 +385,7 @@ busyDialog: document.getElementById("busy-dialog"),
           : "Unavailable";
         top.append(el("span", "busy-badge", label));
       } else if (object.reserved_from) {
-        top.append(el("span", "busy-badge", `Reserved from ${formatDate(object.reserved_from)}`));
+        top.append(el("span", "reserved-badge", `Reserved from ${formatDate(object.reserved_from)}`));
       }
 
       const description = el(
@@ -416,7 +426,7 @@ busyDialog: document.getElementById("busy-dialog"),
       editButton.dataset.action = "edit-object";
       editButton.dataset.id = object.id;
       editButton.setAttribute("aria-label", `Edit ${object.name}`);
-      const taken = object.busy || object.reserved_from;
+      const taken = object.busy;
       const busyButton = el(
         "button",
         "button button-ghost button-small",
@@ -429,12 +439,21 @@ busyDialog: document.getElementById("busy-dialog"),
         "aria-label",
         taken ? `Release ${object.name}` : `Mark ${object.name} busy`,
       );
+      const reserveButton = el(
+        "button",
+        "button button-ghost button-small",
+        object.reserved_from ? "Change reservation" : "Reserve",
+      );
+      reserveButton.type = "button";
+      reserveButton.dataset.action = "reserve-object";
+      reserveButton.dataset.id = object.id;
+      reserveButton.setAttribute("aria-label", `Reserve ${object.name}`);
       const deleteButton = el("button", "button button-danger button-small", "Delete");
       deleteButton.type = "button";
       deleteButton.dataset.action = "delete-object";
       deleteButton.dataset.id = object.id;
       deleteButton.setAttribute("aria-label", `Delete ${object.name}`);
-      actions.append(editButton, busyButton, deleteButton);
+      actions.append(editButton, busyButton, reserveButton, deleteButton);
       footer.append(actions);
 
       card.append(footer);
@@ -524,8 +543,58 @@ busyDialog: document.getElementById("busy-dialog"),
     } finally {
       if (requestId === state.requestId) {
         setLoading(false);
+        loadReservations();
       }
     }
+  }
+
+  async function loadReservations() {
+    if (!elements.reservationsList) {
+      return;
+    }
+    if (!state.user) {
+      elements.reservationsList.replaceChildren();
+      return;
+    }
+    let reserved = [];
+    try {
+      const data = await api("/api/objects?limit=100");
+      reserved = data.objects.filter((object) => object.reservation);
+    } catch (error) {
+      elements.reservationsList.replaceChildren(
+        el("p", "muted", `Could not load reservations: ${error.message}`),
+      );
+      return;
+    }
+    if (reserved.length === 0) {
+      elements.reservationsList.replaceChildren(
+        el("p", "muted", "No active reservations."),
+      );
+      return;
+    }
+    reserved.sort((a, b) => new Date(a.reservation.from) - new Date(b.reservation.from));
+    const rows = reserved.map((object) => {
+      const row = el("div", "reservation-row");
+      const info = el("div", "reservation-info");
+      info.append(el("span", "reservation-name", object.name));
+      const period = el(
+        "span",
+        "reservation-window",
+        `${formatDate(object.reservation.from)} → ${object.reservation.until ? formatDate(object.reservation.until) : "open ended"}`,
+      );
+      info.append(period);
+      row.append(info);
+      const status = el("span", "reservation-status", object.reservation.status);
+      row.append(status);
+      const button = el("button", "button button-ghost button-small", "Change");
+      button.type = "button";
+      button.dataset.action = "reserve-object";
+      button.dataset.id = object.id;
+      button.setAttribute("aria-label", `Change reservation for ${object.name}`);
+      row.append(button);
+      return row;
+    });
+    elements.reservationsList.replaceChildren(...rows);
   }
 
   function openLogin(message = "") {
@@ -634,11 +703,28 @@ busyDialog: document.getElementById("busy-dialog"),
     const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
     elements.busyUntil.min = toDateTimeLocal(minimum);
     elements.busyUntil.value = toDateTimeLocal(suggested);
-    elements.busyFrom.min = toDateTimeLocal(minimum);
-    elements.busyFrom.value = "";
     hideFormError(elements.busyError);
     openDialog(elements.busyDialog);
     elements.busyUntil.focus();
+  }
+
+  function openReserveObject(id) {
+    const object = state.objects.find((item) => item.id === id);
+    if (!object) {
+      return;
+    }
+    elements.reserveForm.reset();
+    elements.reserveObjectId.value = object.id;
+    elements.reserveDialogTitle.textContent = `Reserve "${object.name}"`;
+    const minimum = new Date(Date.now() + 60 * 1000);
+    const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    elements.reserveFrom.min = toDateTimeLocal(minimum);
+    elements.reserveFrom.value = toDateTimeLocal(suggested);
+    elements.reserveUntil.min = toDateTimeLocal(minimum);
+    elements.reserveUntil.value = "";
+    hideFormError(elements.reserveError);
+    openDialog(elements.reserveDialog);
+    elements.reserveFrom.focus();
   }
 
   async function releaseObject(id) {
@@ -861,34 +947,12 @@ busyDialog: document.getElementById("busy-dialog"),
         return;
       }
       elements.busySave.disabled = true;
-      const fromValue = elements.busyFrom.value;
-      const from = fromValue ? new Date(fromValue) : null;
-      if (from && (Number.isNaN(from.getTime()) || from.getTime() <= Date.now())) {
-        showFormError(elements.busyError, "Choose a reservation start in the future.");
-        elements.busyFrom.focus();
-        elements.busySave.disabled = false;
-        return;
-      }
-      if (from && from.getTime() >= until.getTime()) {
-        showFormError(elements.busyError, "Busy until must be after the reservation start.");
-        elements.busyUntil.focus();
-        elements.busySave.disabled = false;
-        return;
-      }
       try {
-        if (from) {
-          await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/reservation`, {
-            method: "PATCH",
-            body: { from: from.toISOString(), until: until.toISOString() },
-          });
-          showStatus("Object reserved.", "success");
-        } else {
-          await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/busy`, {
-            method: "PATCH",
-            body: { busy: true, busy_until: until.toISOString() },
-          });
-          showStatus("Object marked busy.", "success");
-        }
+        await api(`/api/objects/${encodeURIComponent(elements.busyObjectId.value)}/busy`, {
+          method: "PATCH",
+          body: { busy: true, busy_until: until.toISOString() },
+        });
+        showStatus("Object marked busy.", "success");
         closeDialog(elements.busyDialog);
         state.editingBusyId = null;
         await loadObjects();
@@ -896,6 +960,44 @@ busyDialog: document.getElementById("busy-dialog"),
         handleFormError(error, elements.busyError, elements.busyDialog);
       } finally {
         elements.busySave.disabled = false;
+      }
+    });
+
+    elements.reserveForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      hideFormError(elements.reserveError);
+      const fromValue = elements.reserveFrom.value;
+      const from = new Date(fromValue);
+      if (!fromValue || Number.isNaN(from.getTime()) || from.getTime() <= Date.now()) {
+        showFormError(elements.reserveError, "Choose a reservation start in the future.");
+        elements.reserveFrom.focus();
+        return;
+      }
+      const untilValue = elements.reserveUntil.value;
+      const until = untilValue ? new Date(untilValue) : null;
+      if (until && Number.isNaN(until.getTime())) {
+        showFormError(elements.reserveError, "Choose a valid reservation end.");
+        elements.reserveUntil.focus();
+        return;
+      }
+      if (until && until.getTime() <= from.getTime()) {
+        showFormError(elements.reserveError, "Reservation end must be after the start.");
+        elements.reserveUntil.focus();
+        return;
+      }
+      elements.reserveSave.disabled = true;
+      try {
+        await api(`/api/objects/${encodeURIComponent(elements.reserveObjectId.value)}/reservation`, {
+          method: "PATCH",
+          body: { from: from.toISOString(), until: until ? until.toISOString() : null },
+        });
+        showStatus("Object reserved.", "success");
+        closeDialog(elements.reserveDialog);
+        await loadObjects();
+      } catch (error) {
+        handleFormError(error, elements.reserveError, elements.reserveDialog);
+      } finally {
+        elements.reserveSave.disabled = false;
       }
     });
 
@@ -1034,10 +1136,19 @@ busyDialog: document.getElementById("busy-dialog"),
         openEditObject(button.dataset.id);
       } else if (button.dataset.action === "busy-object") {
         openBusyObject(button.dataset.id);
+      } else if (button.dataset.action === "reserve-object") {
+        openReserveObject(button.dataset.id);
       } else if (button.dataset.action === "release-object") {
         releaseObject(button.dataset.id);
       } else if (button.dataset.action === "delete-object") {
         deleteObject(button.dataset.id);
+      }
+    });
+
+    elements.reservationsList.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action='reserve-object']");
+      if (button) {
+        openReserveObject(button.dataset.id);
       }
     });
 

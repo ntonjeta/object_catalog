@@ -14,7 +14,7 @@ func TestObjectsCreateAndUpdate(t *testing.T) {
 	ctx := context.Background()
 	categories := newFakeCategories()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, categories, newFakePhotos())
+	uc := NewObjects(objects, categories, newFakePhotos(), newFakeReservations(), newFakeActivities())
 
 	category, err := NewCategories(categories).Create(ctx, "Books")
 	if err != nil {
@@ -94,7 +94,7 @@ func TestObjectsCreateAndUpdate(t *testing.T) {
 func TestObjectsSetBusy(t *testing.T) {
 	ctx := context.Background()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos(), newFakeReservations(), newFakeActivities())
 	created, err := uc.Create(ctx, CreateObjectInput{Name: "Dune"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -135,7 +135,7 @@ func TestObjectsSetBusy(t *testing.T) {
 func TestObjectsReserve(t *testing.T) {
 	ctx := context.Background()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos(), newFakeReservations(), newFakeActivities())
 	created, err := uc.Create(ctx, CreateObjectInput{Name: "Dune"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -148,8 +148,8 @@ func TestObjectsReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reserve: %v", err)
 	}
-	if !reserved.Busy || reserved.ReservedFrom == nil || !reserved.ReservedFrom.Equal(from) {
-		t.Fatalf("reserved object = %+v, want reserved from %v", reserved, from)
+	if reserved.Busy || reserved.Reservation == nil || !reserved.Reservation.From.Equal(from) {
+		t.Fatalf("reserved object = %+v, want pending reservation from %v", reserved, from)
 	}
 	if reserved.IsBusyAt(now) {
 		t.Fatal("reserved object is busy before reservation start")
@@ -159,7 +159,7 @@ func TestObjectsReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !got.Busy || got.ReservedFrom == nil {
+	if got.Busy || got.Reservation == nil {
 		t.Fatalf("get reserved object = %+v, want reservation", got)
 	}
 
@@ -167,7 +167,7 @@ func TestObjectsReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if released.Busy || released.ReservedFrom != nil {
+	if released.Busy || released.Reservation != nil {
 		t.Fatalf("released object = %+v, want available", released)
 	}
 
@@ -194,7 +194,7 @@ func TestObjectsReserve(t *testing.T) {
 func TestObjectsExpiredBusyIsAvailable(t *testing.T) {
 	ctx := context.Background()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, newFakeCategories(), newFakePhotos())
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos(), newFakeReservations(), newFakeActivities())
 	past := time.Now().UTC().Add(-time.Hour)
 	expired := domain.Object{
 		ID:        "expired",
@@ -215,7 +215,7 @@ func TestObjectsExpiredBusyIsAvailable(t *testing.T) {
 }
 
 func TestObjectsListValidation(t *testing.T) {
-	uc := NewObjects(newFakeObjects(), newFakeCategories(), newFakePhotos())
+	uc := NewObjects(newFakeObjects(), newFakeCategories(), newFakePhotos(), newFakeReservations(), newFakeActivities())
 	ctx := context.Background()
 
 	if _, _, err := uc.List(ctx, ListObjectsInput{Limit: 101}); !errors.Is(err, domain.ErrInvalid) {
@@ -275,7 +275,7 @@ func TestObjectsPhotoLifecycle(t *testing.T) {
 	ctx := context.Background()
 	photos := newFakePhotos()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, newFakeCategories(), photos)
+	uc := NewObjects(objects, newFakeCategories(), photos, newFakeReservations(), newFakeActivities())
 
 	upload := func() *PhotoUpload {
 		return &PhotoUpload{Reader: strings.NewReader("photo"), Filename: "photo.png"}

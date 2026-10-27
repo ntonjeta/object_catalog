@@ -38,4 +38,24 @@ var schema = []string{
 		PRIMARY KEY (object_id, tag)
 	)`,
 	`CREATE INDEX IF NOT EXISTS object_tags_tag_idx ON object_tags(tag)`,
+	`CREATE TABLE IF NOT EXISTS reservations (
+		id TEXT PRIMARY KEY,
+		object_id TEXT NOT NULL REFERENCES objects(id) ON DELETE CASCADE,
+		status TEXT NOT NULL,
+		starts_at TEXT NOT NULL,
+		ends_at TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS reservations_object_id_idx ON reservations(object_id)`,
+	`CREATE TABLE IF NOT EXISTS activities (
+		id TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		object_id TEXT NOT NULL,
+		reservation_id TEXT NOT NULL DEFAULT '',
+		actor_id TEXT NOT NULL DEFAULT '',
+		detail TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS activities_object_id_idx ON activities(object_id)`,
 }

@@ -101,11 +101,17 @@ func TestObjectIsBusyAt(t *testing.T) {
 		t.Fatal("object after expiry is busy")
 	}
 	start := now.Add(time.Hour)
-	if (Object{Busy: true, ReservedFrom: &start, BusyUntil: &until}).IsBusyAt(now) {
+	confirmed := Object{Reservation: &Reservation{Status: ReservationConfirmed, From: start, Until: &until}}
+	if confirmed.EffectiveBusyAt(now) {
 		t.Fatal("object before reservation start is busy")
 	}
-	if !(Object{Busy: true, ReservedFrom: &past, BusyUntil: &until}).IsBusyAt(now) {
+	windowed := Object{Reservation: &Reservation{Status: ReservationConfirmed, From: past, Until: &until}}
+	if !windowed.EffectiveBusyAt(now) {
 		t.Fatal("object during reservation window is not busy")
+	}
+	pending := Object{Reservation: &Reservation{Status: ReservationPending, From: past, Until: &until}}
+	if pending.EffectiveBusyAt(now) {
+		t.Fatal("object with pending reservation is busy")
 	}
 }
 

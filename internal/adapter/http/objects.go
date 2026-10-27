@@ -38,18 +38,25 @@ type reserveRequest struct {
 	Until *time.Time `json:"until"`
 }
 
+type reservationResponse struct {
+	From   time.Time  `json:"from"`
+	Until  *time.Time `json:"until"`
+	Status string     `json:"status"`
+}
+
 type objectResponse struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Description  string            `json:"description"`
-	ImagePath    string            `json:"image_path"`
-	Busy         bool              `json:"busy"`
-	BusyUntil    *time.Time        `json:"busy_until"`
-	ReservedFrom *time.Time        `json:"reserved_from"`
-	Category     *categoryResponse `json:"category"`
-	Tags         []string          `json:"tags"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Description  string               `json:"description"`
+	ImagePath    string               `json:"image_path"`
+	Busy         bool                 `json:"busy"`
+	BusyUntil    *time.Time           `json:"busy_until"`
+	ReservedFrom *time.Time           `json:"reserved_from"`
+	Reservation  *reservationResponse `json:"reservation"`
+	Category     *categoryResponse    `json:"category"`
+	Tags         []string             `json:"tags"`
+	CreatedAt    time.Time            `json:"created_at"`
+	UpdatedAt    time.Time            `json:"updated_at"`
 }
 
 type objectEnvelope struct {
@@ -220,10 +227,17 @@ func toObjectResponse(object domain.Object) objectResponse {
 		ImagePath:    imageURL(object.ImagePath),
 		Busy:         object.IsBusyAt(time.Now().UTC()),
 		BusyUntil:    object.BusyUntil,
-		ReservedFrom: object.ReservedFrom,
+		ReservedFrom: reservationStart(object.Reservation),
 		Tags:         object.Tags,
 		CreatedAt:    object.CreatedAt,
 		UpdatedAt:    object.UpdatedAt,
+	}
+	if object.Reservation != nil {
+		response.Reservation = &reservationResponse{
+			From:   object.Reservation.From,
+			Until:  object.Reservation.Until,
+			Status: string(object.Reservation.Status),
+		}
 	}
 	if response.Tags == nil {
 		response.Tags = []string{}
@@ -244,6 +258,14 @@ func imageURL(fileName string) string {
 		return fileName
 	}
 	return imageURLPrefix + fileName
+}
+
+func reservationStart(reservation *domain.Reservation) *time.Time {
+	if reservation == nil {
+		return nil
+	}
+	from := reservation.From
+	return &from
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {

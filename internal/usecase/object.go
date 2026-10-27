@@ -234,6 +234,11 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 	} else {
 		object.Busy = false
 		object.BusyUntil = nil
+		for _, reservation := range actives {
+			if err := uc.cancelReservation(ctx, reservation, now); err != nil {
+				return domain.Object{}, err
+			}
+		}
 	}
 	object.UpdatedAt = now
 	if err := uc.objects.Update(ctx, object); err != nil {
@@ -250,6 +255,118 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 	}
 	uc.attachReservation(ctx, &object, now)
 	return object, nil
+}
+
+type ReserveObjectInput struct {
+	From  time.Time
+	Until *time.Time
+}
+
+// Reserve places a pending reservation on the object, replacing any live
+// reservation. The object becomes unavailable only once the window starts and
+// the reservation is confirmed; until then it stays lendable.
+func (uc *Objects) Reserve(ctx context.Context, id string, input ReserveObjectInput) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	now := time.Now().UTC()
+	normalizeBusy(&object, now)
+	from := input.From.UTC()
+	if !from.After(now) {
+		return domain.Object{}, fmt.Errorf("%w: reservation start must be in the future", domain.ErrInvalid)
+	}
+	var until *time.Time
+	if input.Until != nil {
+		value := input.Until.UTC()
+		if !value.After(from) {
+			return domain.Object{}, fmt.Errorf("%w: reservation end must be after the start", domain.ErrInvalid)
+		}
+		until = &value
+	}
+	if object.IsBusyAt(now) {
+		return domain.Object{}, fmt.Errorf("%w: object is on loan until %s", domain.ErrConflict, formatOptionalTime(object.BusyUntil))
+	}
+	actives, err := uc.reservations.ActiveByObject(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	for _, reservation := range actives {
+		if reservation.TakesAt(now) {
+			return domain.Object{}, fmt.Errorf("%w: confirmed reservation is active %s", domain.ErrConflict, reservationWindow(reservation))
+		}
+	}
+	for _, reservation := range actives {
+		if err := uc.cancelReservation(ctx, reservation, now); err != nil {
+			return domain.Object{}, err
+		}
+	}
+	reservationID, err := domain.NewID()
+	if err != nil {
+		return domain.Object{}, fmt.Errorf("generate reservation id: %w", err)
+	}
+	reservation := domain.Reservation{
+		ID:        reservationID,
+		ObjectID:  id,
+		From:      from,
+		Until:     until,
+		Status:    domain.ReservationPending,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := uc.reservations.Create(ctx, reservation); err != nil {
+		return domain.Object{}, err
+	}
+	if err := recordActivity(ctx, uc.activities, domain.ActivityReservationMade, id, reservationID, "reserved "+reservationWindow(reservation), now); err != nil {
+		return domain.Object{}, err
+	}
+	uc.attachReservation(ctx, &object, now)
+	return object, nil
+}
+
+func (uc *Objects) cancelReservation(ctx context.Context, reservation domain.Reservation, now time.Time) error {
+	if reservation.Status == domain.ReservationCancelled || reservation.Status == domain.ReservationLapsed {
+		return nil
+	}
+	updated := reservation
+	updated.Status = domain.ReservationCancelled
+	updated.UpdatedAt = now
+	if err := uc.reservations.Update(ctx, updated); err != nil {
+		return err
+	}
+	return recordActivity(ctx, uc.activities, domain.ActivityReservationCancelled, reservation.ObjectID, reservation.ID, "cancelled "+reservationWindow(reservation), now)
+}
+
+func lapseStaleReservation(ctx context.Context, repo ReservationRepository, acts ActivityRepository, reservation domain.Reservation, now time.Time) domain.Reservation {
+	if reservation.IsActiveAt(now) {
+		return reservation
+	}
+	updated := reservation
+	updated.Status = domain.ReservationLapsed
+	updated.UpdatedAt = now
+	if err := repo.Update(ctx, updated); err != nil {
+		return reservation
+	}
+	_ = recordActivity(ctx, acts, domain.ActivityReservationLapsed, reservation.ObjectID, reservation.ID, "lapsed "+reservationWindow(reservation), now)
+	return updated
+}
+
+func recordActivity(ctx context.Context, repo ActivityRepository, activityType domain.ActivityType, objectID, reservationID, detail string, at time.Time) error {
+	if repo == nil {
+		return nil
+	}
+	id, err := domain.NewID()
+	if err != nil {
+		return fmt.Errorf("generate activity id: %w", err)
+	}
+	return repo.Create(ctx, domain.Activity{
+		ID:            id,
+		Type:          activityType,
+		ObjectID:      objectID,
+		ReservationID: reservationID,
+		Detail:        detail,
+		CreatedAt:     at,
+	})
 }
 
 func formatOptionalTime(value *time.Time) string {

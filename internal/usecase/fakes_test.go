@@ -264,3 +264,62 @@ func (f *fakePhotos) Delete(_ context.Context, path string) error {
 	f.deleted = append(f.deleted, path)
 	return nil
 }
+
+type fakeReservations struct {
+	reservations map[string]domain.Reservation
+}
+
+func newFakeReservations() *fakeReservations {
+	return &fakeReservations{reservations: make(map[string]domain.Reservation)}
+}
+
+func (f *fakeReservations) Create(_ context.Context, reservation domain.Reservation) error {
+	if _, ok := f.reservations[reservation.ID]; ok {
+		return domain.ErrConflict
+	}
+	f.reservations[reservation.ID] = reservation
+	return nil
+}
+
+func (f *fakeReservations) Update(_ context.Context, reservation domain.Reservation) error {
+	if _, ok := f.reservations[reservation.ID]; !ok {
+		return domain.ErrNotFound
+	}
+	f.reservations[reservation.ID] = reservation
+	return nil
+}
+
+func (f *fakeReservations) ByID(_ context.Context, id string) (domain.Reservation, error) {
+	reservation, ok := f.reservations[id]
+	if !ok {
+		return domain.Reservation{}, domain.ErrNotFound
+	}
+	return reservation, nil
+}
+
+func (f *fakeReservations) ActiveByObject(_ context.Context, objectID string) ([]domain.Reservation, error) {
+	var actives []domain.Reservation
+	for _, reservation := range f.reservations {
+		if reservation.ObjectID == objectID && (reservation.Status == domain.ReservationPending || reservation.Status == domain.ReservationConfirmed) {
+			actives = append(actives, reservation)
+		}
+	}
+	return actives, nil
+}
+
+type fakeActivities struct {
+	activities []domain.Activity
+}
+
+func newFakeActivities() *fakeActivities {
+	return &fakeActivities{}
+}
+
+func (f *fakeActivities) Create(_ context.Context, activity domain.Activity) error {
+	f.activities = append(f.activities, activity)
+	return nil
+}
+
+func (f *fakeActivities) List(_ context.Context, _ ActivityFilter) ([]domain.Activity, int, error) {
+	return f.activities, len(f.activities), nil
+}

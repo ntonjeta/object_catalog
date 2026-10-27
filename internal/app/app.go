@@ -59,9 +59,11 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	sessions := sqlite.NewSessionRepo(db)
 	categoryRepo := sqlite.NewCategoryRepo(db)
 	objectRepo := sqlite.NewObjectRepo(db)
+	reservationRepo := sqlite.NewReservationRepo(db)
+	activityRepo := sqlite.NewActivityRepo(db)
 
 	auth := usecase.NewAuth(users, sessions, cfg.SessionTTL)
-	objects := usecase.NewObjects(objectRepo, categoryRepo, photos)
+	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
 	handler := httpapi.New(auth, objects, categories, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,

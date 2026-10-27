@@ -451,6 +451,22 @@ input[type="file"] {
   white-space: nowrap;
 }
 
+.reserved-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fff8d6;
+  color: #8a6d0b;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.object-card-reserved {
+  border-color: #f0d64a;
+  background: #fffdf2;
+}
+
 .card-description {
   flex: 1;
   margin-bottom: 14px;
@@ -519,6 +535,55 @@ input[type="file"] {
   margin-top: 50px;
   border-top: 1px solid var(--border);
   padding-top: 28px;
+}
+
+.reservations-panel {
+  margin-top: 50px;
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+
+.reservations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.reservation-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #f0d64a;
+  border-radius: var(--radius);
+  background: #fffdf2;
+  padding: 12px 16px;
+}
+
+.reservation-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reservation-name {
+  font-weight: 750;
+}
+
+.reservation-window {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.reservation-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #fff8d6;
+  color: #8a6d0b;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 750;
 }
 
 .section-heading {

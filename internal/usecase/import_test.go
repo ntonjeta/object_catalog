@@ -13,7 +13,7 @@ func TestObjectsImportCreatesUpdatesAndReportsFailures(t *testing.T) {
 	categories := newFakeCategories()
 	objects := newFakeObjects()
 	photos := newFakePhotos()
-	uc := NewObjects(objects, categories, photos)
+	uc := NewObjects(objects, categories, photos, newFakeReservations(), newFakeActivities())
 
 	books, err := NewCategories(categories).Create(ctx, "Books")
 	if err != nil {
@@ -77,7 +77,7 @@ func TestObjectsImportBlankFieldsClearAndPreservePhoto(t *testing.T) {
 	categories := newFakeCategories()
 	objects := newFakeObjects()
 	photos := newFakePhotos()
-	uc := NewObjects(objects, categories, photos)
+	uc := NewObjects(objects, categories, photos, newFakeReservations(), newFakeActivities())
 
 	books, err := NewCategories(categories).Create(ctx, "Books")
 	if err != nil {
@@ -148,7 +148,7 @@ func TestObjectsImportRejectsDuplicateExistingNames(t *testing.T) {
 	ctx := context.Background()
 	categories := newFakeCategories()
 	objects := newFakeObjects()
-	uc := NewObjects(objects, categories, newFakePhotos())
+	uc := NewObjects(objects, categories, newFakePhotos(), newFakeReservations(), newFakeActivities())
 
 	for _, id := range []string{"one", "two"} {
 		if err := objects.Create(ctx, domain.Object{ID: id, Name: "Dune"}); err != nil {

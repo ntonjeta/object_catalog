@@ -72,6 +72,16 @@
       </nav>
     </section>
 
+    <section class="reservations-panel" id="reservations-panel" aria-labelledby="reservations-heading" data-admin-only hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="reservations-heading">Reservations</h2>
+          <p class="muted">Objects with a live reservation, soonest first.</p>
+        </div>
+      </div>
+      <div id="reservations-list" class="reservations-list"></div>
+    </section>
+
     <section class="categories-panel" aria-labelledby="categories-heading">
       <div class="section-heading">
         <div>
@@ -163,14 +173,33 @@
         <span>Busy until</span>
         <input id="busy-until" name="busy_until" type="datetime-local" required>
       </label>
-      <label class="field">
-        <span>Reserve from (optional)</span>
-        <input id="busy-from" name="reserved_from" type="datetime-local">
-      </label>
       <p id="busy-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button class="button button-ghost" type="button" data-close-dialog="busy-dialog">Cancel</button>
         <button id="busy-save" class="button button-primary" type="submit">Mark busy</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="reserve-dialog" class="dialog" aria-labelledby="reserve-dialog-title">
+    <form id="reserve-form" class="dialog-form">
+      <div>
+        <h2 id="reserve-dialog-title">Reserve object</h2>
+        <p class="muted">The object stays lendable until the reservation starts.</p>
+      </div>
+      <input id="reserve-object-id" type="hidden">
+      <label class="field">
+        <span>Reserved from</span>
+        <input id="reserve-from" name="from" type="datetime-local" required>
+      </label>
+      <label class="field">
+        <span>Reserved until (optional)</span>
+        <input id="reserve-until" name="until" type="datetime-local">
+      </label>
+      <p id="reserve-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-ghost" type="button" data-close-dialog="reserve-dialog">Cancel</button>
+        <button id="reserve-save" class="button button-primary" type="submit">Reserve</button>
       </div>
     </form>
   </dialog>
