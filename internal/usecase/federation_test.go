@@ -437,3 +437,486 @@ func TestPeersLists(t *testing.T) {
 		t.Fatalf("listed = %+v, want the two seeded peers in order", listed)
 	}
 }
+
+const testPeerActor = "https://peer.example/ap/actors/catalog"
+
+// seedTestPeer stores a peer directly in the fake, bypassing AddPeer: the
+// ingest tests need peers in a given state without a resolvable actor.
+func seedTestPeer(peers *fakePeers, actorID string, state domain.PeerState) domain.Peer {
+	peer := domain.Peer{
+		ID:               "peer-" + actorID,
+		ActorID:          actorID,
+		InboxURL:         actorID + "/inbox",
+		FollowActivityID: "https://catalog.example.com/ap/outbox/peer-" + actorID,
+		State:            state,
+		CreatedAt:        time.Now().UTC(),
+	}
+	peers.peers = append(peers.peers, peer)
+	return peer
+}
+
+func addTestInboxEvent(t *testing.T, ctx context.Context, inbox *fakeInboxEvents, event domain.InboxEvent) {
+	t.Helper()
+	event.ReceivedAt = time.Now().UTC()
+	if err := inbox.Add(ctx, event); err != nil {
+		t.Fatalf("enqueue %s: %v", event.ID, err)
+	}
+}
+
+func assertAllProcessed(t *testing.T, inbox *fakeInboxEvents) {
+	t.Helper()
+	for _, event := range inbox.events {
+		if event.ProcessedAt == nil {
+			t.Fatalf("event %s not processed (attempts %d)", event.ID, event.Attempts)
+		}
+	}
+}
+
+func mustPeerTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time %q: %v", value, err)
+	}
+	return parsed.UTC()
+}
+
+func equalRemoteObjects(a, b domain.RemoteObject) bool {
+	if a.ID != b.ID || a.PeerActorID != b.PeerActorID || a.Name != b.Name ||
+		a.Description != b.Description || a.ImageURL != b.ImageURL ||
+		a.CategoryName != b.CategoryName || a.Busy != b.Busy {
+		return false
+	}
+	switch {
+	case a.BusyUntil == nil || b.BusyUntil == nil:
+		if a.BusyUntil != b.BusyUntil {
+			return false
+		}
+	case !a.BusyUntil.Equal(*b.BusyUntil):
+		return false
+	}
+	if len(a.Tags) != len(b.Tags) {
+		return false
+	}
+	for i := range a.Tags {
+		if a.Tags[i] != b.Tags[i] {
+			return false
+		}
+	}
+	return a.CreatedAt.Equal(b.CreatedAt) && a.UpdatedAt.Equal(b.UpdatedAt)
+}
+
+// peerCreatePayload wraps an article object in a biblio-oggetto Create
+// activity announcing it under actor.
+func peerCreatePayload(actor, object string) string {
+	return `{"@context":"https://www.w3.org/ns/activitystreams","id":"https://peer.example/ap/outbox/a1","type":"Create","actor":"` +
+		actor + `","object":` + object + `}`
+}
+
+// peerArticleObject is a minimal origin-valid Article object, extended with
+// the given raw JSON field fragments (each starting with a comma).
+func peerArticleObject(fields string) string {
+	return `{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":"Dune"` + fields + `}`
+}
+
+func TestInboxAcceptMarksPeerAccepted(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	peers.peers = append(peers.peers, domain.Peer{
+		ID:               "peer-1",
+		ActorID:          testPeerActor,
+		InboxURL:         "https://peer.example/ap/inbox",
+		FollowActivityID: "https://us/ap/outbox/f1",
+		State:            domain.PeerPending,
+		CreatedAt:        time.Now().UTC(),
+	})
+
+	known := domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/a1", Type: "Accept",
+		Actor: testPeerActor, ObjectID: "https://us/ap/outbox/f1",
+	}
+	unknown := domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/a2", Type: "Accept",
+		Actor: testPeerActor, ObjectID: "https://us/ap/outbox/never-joined",
+	}
+	// Accept answering our follow but sent by an actor that is not the peer.
+	spoofed := domain.InboxEvent{
+		ID: "https://stranger.example/ap/outbox/a3", Type: "Accept",
+		Actor: "https://stranger.example/ap/actors/catalog", ObjectID: "https://us/ap/outbox/f1",
+	}
+	for _, event := range []domain.InboxEvent{known, unknown, spoofed} {
+		addTestInboxEvent(t, ctx, inbox, event)
+	}
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(peers.accepted) != 1 || peers.accepted[0] != testPeerActor {
+		t.Fatalf("accepted = %v, want one MarkAccepted for %s", peers.accepted, testPeerActor)
+	}
+	if peers.peers[0].State != domain.PeerAccepted {
+		t.Fatalf("peer state = %q, want accepted", peers.peers[0].State)
+	}
+	if len(remoteObjects.puts) != 0 {
+		t.Fatalf("puts = %+v, Accept must not ingest objects", remoteObjects.puts)
+	}
+	assertAllProcessed(t, inbox)
+}
+
+func TestIngestCreateStoresRemoteObject(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+
+	const payload = `{
+		"@context": "https://www.w3.org/ns/activitystreams",
+		"id": "https://peer.example/ap/outbox/create-1",
+		"type": "Create",
+		"actor": "https://peer.example/ap/actors/catalog",
+		"published": "2026-10-01T10:00:00Z",
+		"object": {
+			"@context": "https://www.w3.org/ns/activitystreams",
+			"id": "https://peer.example/ap/objects/obj-1",
+			"type": "Article",
+			"name": "Dune",
+			"content": "A spice opera.",
+			"image": "https://peer.example/static/uploads/dune.png",
+			"published": "2026-10-01T10:00:00Z",
+			"updated": "2026-10-05T12:30:00Z",
+			"url": "https://peer.example/objects/obj-1",
+			"attachment": [
+				{"type": "Note", "name": "Availability", "content": "on loan until 2026-12-01T00:00:00Z"},
+				{"type": "Note", "name": "Category", "content": "Books"},
+				{"type": "Tag", "name": "#dune"},
+				{"type": "Tag", "name": "#movie"},
+				{"type": "Tag", "name": "#Dune"}
+			]
+		}
+	}`
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID:       "https://peer.example/ap/outbox/create-1",
+		Type:     "Create",
+		Actor:    testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1",
+		Payload:  payload,
+	})
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	assertAllProcessed(t, inbox)
+	if len(remoteObjects.puts) != 1 {
+		t.Fatalf("puts = %+v, want one mirrored object", remoteObjects.puts)
+	}
+	until := mustPeerTime(t, "2026-12-01T00:00:00Z")
+	want := domain.RemoteObject{
+		ID:           "https://peer.example/ap/objects/obj-1",
+		PeerActorID:  testPeerActor,
+		Name:         "Dune",
+		Description:  "A spice opera.",
+		ImageURL:     "https://peer.example/static/uploads/dune.png",
+		CategoryName: "Books",
+		Busy:         true,
+		BusyUntil:    &until,
+		Tags:         []string{"dune", "movie"},
+		CreatedAt:    mustPeerTime(t, "2026-10-01T10:00:00Z"),
+		UpdatedAt:    mustPeerTime(t, "2026-10-05T12:30:00Z"),
+	}
+	if got := remoteObjects.puts[0]; !equalRemoteObjects(got, want) {
+		t.Fatalf("mirrored object =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestIngestUpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+
+	create := peerCreatePayload(testPeerActor, peerArticleObject(""))
+	update := peerCreatePayload(testPeerActor, peerArticleObject(`,"name":"Dune Messiah","content":"The spice must flow."`))
+	deleteActivity := `{"id":"https://peer.example/ap/outbox/d1","type":"Delete","actor":"` + testPeerActor +
+		`","object":{"id":"https://peer.example/ap/objects/obj-1","type":"Tombstone"}}`
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/c1", Type: "Create", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1", Payload: create,
+	})
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/c2", Type: "Update", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1", Payload: update,
+	})
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(remoteObjects.puts) != 2 {
+		t.Fatalf("puts = %d, want Create then Update each calling Put", len(remoteObjects.puts))
+	}
+	if remoteObjects.puts[0].ID != "https://peer.example/ap/objects/obj-1" ||
+		remoteObjects.puts[1].ID != remoteObjects.puts[0].ID {
+		t.Fatalf("puts ids = %q, %q, want the second Put to reuse the first id",
+			remoteObjects.puts[0].ID, remoteObjects.puts[1].ID)
+	}
+	if remoteObjects.puts[1].Name != "Dune Messiah" {
+		t.Fatalf("second put name = %q, want the update to replace the article", remoteObjects.puts[1].Name)
+	}
+	if len(remoteObjects.objects) != 1 || remoteObjects.objects[0].Name != "Dune Messiah" {
+		t.Fatalf("stored = %+v, want one replaced row", remoteObjects.objects)
+	}
+
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/d1", Type: "Delete", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1", Payload: deleteActivity,
+	})
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process delete: %v", err)
+	}
+	if len(remoteObjects.deleted) != 1 || remoteObjects.deleted[0] != "https://peer.example/ap/objects/obj-1" {
+		t.Fatalf("deleted = %v, want the tombstoned object id", remoteObjects.deleted)
+	}
+	if len(remoteObjects.objects) != 0 {
+		t.Fatalf("stored = %+v, want the mirror gone", remoteObjects.objects)
+	}
+	if len(remoteObjects.puts) != 2 {
+		t.Fatalf("puts = %d, want no new mirrors from the Delete", len(remoteObjects.puts))
+	}
+	assertAllProcessed(t, inbox)
+}
+
+func TestIngestIgnoresNonPeer(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerPending)
+	stranger := "https://stranger.example/ap/actors/catalog"
+
+	strangerArticle := `{"id":"https://stranger.example/ap/objects/x","type":"Article","name":"Contraband"}`
+	pending := domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/c1", Type: "Create", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1",
+		Payload:  peerCreatePayload(testPeerActor, peerArticleObject("")),
+	}
+	unknownCreate := domain.InboxEvent{
+		ID: "https://stranger.example/ap/outbox/c2", Type: "Create", Actor: stranger,
+		ObjectID: "https://stranger.example/ap/objects/x",
+		Payload: `{"id":"https://stranger.example/ap/outbox/c2","type":"Create","actor":"` + stranger +
+			`","object":` + strangerArticle + `}`,
+	}
+	unknownDelete := domain.InboxEvent{
+		ID: "https://stranger.example/ap/outbox/d2", Type: "Delete", Actor: stranger,
+		ObjectID: "https://stranger.example/ap/objects/x",
+		Payload: `{"id":"https://stranger.example/ap/outbox/d2","type":"Delete","actor":"` + stranger +
+			`","object":{"id":"https://stranger.example/ap/objects/x","type":"Tombstone"}}`,
+	}
+	for _, event := range []domain.InboxEvent{pending, unknownCreate, unknownDelete} {
+		addTestInboxEvent(t, ctx, inbox, event)
+	}
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(remoteObjects.puts) != 0 || len(remoteObjects.deleted) != 0 {
+		t.Fatalf("puts = %+v, deleted = %v, want no mirrors from non-accepted actors",
+			remoteObjects.puts, remoteObjects.deleted)
+	}
+	if len(peers.accepted) != 0 {
+		t.Fatalf("accepted = %v, want no state change", peers.accepted)
+	}
+	assertAllProcessed(t, inbox)
+}
+
+func TestIngestArticleDefensiveParsing(t *testing.T) {
+	dropped := func(t *testing.T, name, object string) {
+		t.Helper()
+		if _, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor); ok {
+			t.Fatalf("%s: article was ingested, want it dropped", name)
+		}
+	}
+
+	t.Run("object as bare string id", func(t *testing.T) {
+		dropped(t, "bare string object", `"https://peer.example/ap/objects/obj-1"`)
+	})
+	t.Run("missing name", func(t *testing.T) {
+		dropped(t, "missing name", `{"id":"https://peer.example/ap/objects/obj-1","type":"Article"}`)
+	})
+	t.Run("whitespace name", func(t *testing.T) {
+		dropped(t, "whitespace name", `{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":"   "}`)
+	})
+	t.Run("missing article id", func(t *testing.T) {
+		dropped(t, "missing id", `{"type":"Article","name":"Dune"}`)
+	})
+	t.Run("non-http article id", func(t *testing.T) {
+		dropped(t, "non-http id", `{"id":"ftp://peer.example/ap/objects/x","type":"Article","name":"Dune"}`)
+	})
+	t.Run("actor mismatch", func(t *testing.T) {
+		// Same origin, but the activity names a different actor than the peer.
+		impersonator := `{"@context":"https://www.w3.org/ns/activitystreams","id":"https://peer.example/ap/outbox/a1",` +
+			`"type":"Create","actor":"https://peer.example/ap/actors/other","object":` + peerArticleObject("") + `}`
+		if _, ok := decodePeerArticle([]byte(impersonator), testPeerActor); ok {
+			t.Fatal("article from a mismatched activity actor was ingested")
+		}
+	})
+
+	t.Run("oversized name truncates to 200", func(t *testing.T) {
+		long := strings.Repeat("ü", 500)
+		object := fmt.Sprintf(`{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":%q}`, long)
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor)
+		if !ok {
+			t.Fatal("long name dropped, want it truncated and stored")
+		}
+		if got.Name != string([]rune(long)[:200]) || len([]rune(got.Name)) != 200 {
+			t.Fatalf("name = %d runes, want the first 200 runes", len([]rune(got.Name)))
+		}
+	})
+
+	t.Run("oversized description truncates to 5000", func(t *testing.T) {
+		long := strings.Repeat("d", 6000)
+		object := fmt.Sprintf(`{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":"Dune","content":%q}`, long)
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor)
+		if !ok {
+			t.Fatal("long description dropped, want it truncated and stored")
+		}
+		if len([]rune(got.Description)) != 5000 {
+			t.Fatalf("description = %d runes, want 5000", len([]rune(got.Description)))
+		}
+	})
+
+	t.Run("non-http image dropped", func(t *testing.T) {
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
+			peerArticleObject(`,"image":"ftp://peer.example/x.png"`))), testPeerActor)
+		if !ok {
+			t.Fatal("article dropped for a bad image, want the image only cleared")
+		}
+		if got.ImageURL != "" {
+			t.Fatalf("image = %q, want the non-http(s) url dropped", got.ImageURL)
+		}
+	})
+
+	t.Run("relative image dropped", func(t *testing.T) {
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
+			peerArticleObject(`,"image":"/static/uploads/x.png"`))), testPeerActor)
+		if !ok {
+			t.Fatal("article dropped for a relative image, want the image only cleared")
+		}
+		if got.ImageURL != "" {
+			t.Fatalf("image = %q, want the relative path dropped", got.ImageURL)
+		}
+	})
+
+	availability := func(content string) (domain.RemoteObject, bool) {
+		payload := peerCreatePayload(testPeerActor, peerArticleObject(
+			`,"attachment":[{"type":"Note","name":"Availability","content":"`+content+`"}]`))
+		return decodePeerArticle([]byte(payload), testPeerActor)
+	}
+	t.Run("availability on loan", func(t *testing.T) {
+		got, ok := availability("on loan")
+		if !ok || !got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want Busy true with nil until", got, ok)
+		}
+	})
+	t.Run("availability unparseable expiry", func(t *testing.T) {
+		got, ok := availability("on loan until tomorrow")
+		if !ok || got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want unparseable to read as available", got, ok)
+		}
+	})
+	t.Run("availability garbage", func(t *testing.T) {
+		got, ok := availability("churned")
+		if !ok || got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want garbage to read as available", got, ok)
+		}
+	})
+
+	t.Run("tag list clamps to twenty", func(t *testing.T) {
+		parts := make([]string, 0, 25)
+		for i := 0; i < 25; i++ {
+			parts = append(parts, fmt.Sprintf(`{"type":"Tag","name":"#tag%02d"}`, i))
+		}
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
+			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor)
+		if !ok {
+			t.Fatal("article dropped for 25 tags, want the tag list truncated")
+		}
+		if len(got.Tags) != 20 {
+			t.Fatalf("tags = %v, want the first 20", got.Tags)
+		}
+	})
+}
+
+func TestIngestRejectsForeignOriginID(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+
+	const articleID = "https://peer.example/ap/objects/ok"
+	foreignID := "https://evil.example/ap/objects/x"
+	suffixTrickID := "https://peer.example.evil.example/ap/objects/x"
+	foreignArticle := `{"id":"` + foreignID + `","type":"Article","name":"Contraband"}`
+	// Same path suffix, different origin: a naive suffix check would accept it.
+	suffixTrickArticle := `{"id":"` + suffixTrickID + `","type":"Article","name":"Contraband"}`
+	ownArticle := `{"id":"` + articleID + `","type":"Article","name":"Dune"}`
+	for i, article := range []struct{ object, id string }{
+		{foreignArticle, foreignID},
+		{suffixTrickArticle, suffixTrickID},
+		{ownArticle, articleID},
+	} {
+		activityID := fmt.Sprintf("https://peer.example/ap/outbox/c%d", i)
+		addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+			ID: activityID, Type: "Create", Actor: testPeerActor,
+			ObjectID: article.id,
+			Payload:  `{"id":"` + activityID + `","type":"Create","actor":"` + testPeerActor + `","object":` + article.object + `}`,
+		})
+	}
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	assertAllProcessed(t, inbox)
+	if len(remoteObjects.puts) != 1 {
+		t.Fatalf("puts = %+v, want only the same-origin article mirrored", remoteObjects.puts)
+	}
+	if remoteObjects.puts[0].ID != articleID {
+		t.Fatalf("put id = %q, want %q", remoteObjects.puts[0].ID, articleID)
+	}
+
+	// Origin comparison is case-insensitive on scheme+host.
+	mixedCase := "https://Peer.Example/ap/actors/catalog"
+	got, ok := decodePeerArticle([]byte(peerCreatePayload(mixedCase, ownArticle)), mixedCase)
+	if !ok {
+		t.Fatal("case-insensitive origin match was dropped")
+	}
+	if got.PeerActorID != mixedCase || got.ID != articleID {
+		t.Fatalf("object = %+v, want the peer actor id kept verbatim", got)
+	}
+}
+
+func TestIngestBadArticleDoesNotFailBatch(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+
+	junk := domain.InboxEvent{
+		ID: "https://junk.example/ap/outbox/j1", Type: "Create",
+		Actor:   "https://junk.example/ap/actors/catalog",
+		Payload: "this is not json at all {{{",
+	}
+	acceptedPeerJunk := domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/bad-1", Type: "Create", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/bad-1",
+		Payload:  peerCreatePayload(testPeerActor, `"https://peer.example/ap/objects/bad-1"`),
+	}
+	good := domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/good-1", Type: "Create", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1",
+		Payload:  peerCreatePayload(testPeerActor, peerArticleObject("")),
+	}
+	for _, event := range []domain.InboxEvent{junk, acceptedPeerJunk, good} {
+		addTestInboxEvent(t, ctx, inbox, event)
+	}
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	assertAllProcessed(t, inbox)
+	if len(remoteObjects.puts) != 1 || remoteObjects.puts[0].ID != "https://peer.example/ap/objects/obj-1" {
+		t.Fatalf("puts = %+v, want only the good article mirrored", remoteObjects.puts)
+	}
+}

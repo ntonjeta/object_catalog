@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -87,9 +88,9 @@ func (f *Federation) EnqueueActivity(ctx context.Context, sender string, payload
 	return nil
 }
 
-// ProcessPendingInbox applies queued inbox activities. Unknown types and
-// activities not targeting the instance actor are dropped after being
-// marked processed.
+// ProcessPendingInbox applies queued inbox activities. Unknown types,
+// activities from peers that were not accepted and activities carrying
+// unparseable content are dropped after being marked processed.
 func (f *Federation) ProcessPendingInbox(ctx context.Context, now time.Time) error {
 	events, err := f.inbox.Pending(ctx, now.UTC(), inboxBatchSize)
 	if err != nil {
@@ -103,14 +104,7 @@ func (f *Federation) ProcessPendingInbox(ctx context.Context, now time.Time) err
 		return err
 	}
 	for _, event := range events {
-		err := error(nil)
-		switch {
-		case event.Type == "Follow" && event.ObjectID == actor.ID:
-			err = f.Follow(ctx, FollowRequest{ActivityID: event.ID, ActorID: event.Actor, ObjectID: event.ObjectID})
-		case event.Type == "Undo" && event.ObjectID == actor.ID:
-			err = f.Unfollow(ctx, FollowRequest{ActivityID: event.ID, ActorID: event.Actor, ObjectID: event.ObjectID})
-		}
-		if err != nil {
+		if err := f.processInboxEvent(ctx, event, actor, now); err != nil {
 			attempts := event.Attempts + 1
 			if markErr := f.inbox.MarkAttempt(ctx, event.ID, attempts, now.Add(RetryDelay(attempts))); markErr != nil {
 				return markErr
@@ -122,6 +116,39 @@ func (f *Federation) ProcessPendingInbox(ctx context.Context, now time.Time) err
 		}
 	}
 	return nil
+}
+
+// processInboxEvent dispatches one inbox activity. A nil error marks the
+// event processed, drops included: known content failures must never retry
+// forever. Only errors from repository or network dependencies are returned
+// so the caller reschedules the event with backoff.
+func (f *Federation) processInboxEvent(ctx context.Context, event domain.InboxEvent, actor InstanceActor, now time.Time) error {
+	switch {
+	case event.Type == "Follow" && event.ObjectID == actor.ID:
+		return f.Follow(ctx, FollowRequest{ActivityID: event.ID, ActorID: event.Actor, ObjectID: event.ObjectID})
+	case event.Type == "Undo" && event.ObjectID == actor.ID:
+		return f.Unfollow(ctx, FollowRequest{ActivityID: event.ID, ActorID: event.Actor, ObjectID: event.ObjectID})
+	case event.Type == "Accept":
+		return f.processAccept(ctx, event)
+	case event.Type == "Create", event.Type == "Update":
+		accepted, err := f.isAcceptedPeer(ctx, event.Actor)
+		if err != nil || !accepted {
+			return err
+		}
+		return f.ingestArticle(ctx, event)
+	case event.Type == "Delete":
+		if event.ObjectID == "" {
+			log.Printf("federation: dropping delete without object id from %q", event.Actor)
+			return nil
+		}
+		accepted, err := f.isAcceptedPeer(ctx, event.Actor)
+		if err != nil || !accepted {
+			return err
+		}
+		return f.remoteObjects.Delete(ctx, event.ObjectID)
+	default:
+		return nil
+	}
 }
 
 func decodeInboxEvent(sender string, payload []byte) (domain.InboxEvent, error) {
