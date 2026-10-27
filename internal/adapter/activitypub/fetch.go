@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -66,23 +67,42 @@ func (r *RemoteActors) Resolve(ctx context.Context, input string) (domain.Remote
 	}
 	if parsed, err := url.Parse(target); err == nil && parsed.Host != "" &&
 		(parsed.Scheme == "http" || parsed.Scheme == "https") {
+		if parsed.User != nil || parsed.Fragment != "" {
+			return domain.RemoteActor{}, fmt.Errorf("%w: target must be an actor URL or handle@host", domain.ErrInvalid)
+		}
 		return r.FetchActor(ctx, target)
 	}
 	return domain.RemoteActor{}, fmt.Errorf("%w: target must be an actor URL or handle@host", domain.ErrInvalid)
 }
 
+// webfingerScheme returns the scheme used to probe host's WebFinger endpoint.
+// Plain http is allowed only for the exact host "localhost" or a loopback IP
+// (127.0.0.0/8 or ::1), port-insensitive, so local test instances join
+// without TLS. Registerable look-alikes (localhost.evil.com,
+// 127.0.0.1.evil.com, localhost1) are not loopback and require https. Edge
+// cases, documented for the callers: a bracketed IPv6 literal must carry a
+// port ("[::1]:8080" is http, bare "[::1]" falls back to https); a bare
+// unbracketed "::1" is treated as http but fails later URL parsing when the
+// request is built, which maps to ErrInvalid.
+func webfingerScheme(host string) string {
+	if bare, _, err := net.SplitHostPort(host); err == nil {
+		host = bare
+	}
+	if host == "localhost" {
+		return "http"
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return "http"
+	}
+	return "https"
+}
+
 // webfingerSelfURL performs RFC 7033 WebFinger for "user@host" and returns
-// the href of the first rel=self link. Hosts starting with "localhost" or
-// "127." are probed over plain http so local test instances join without
-// TLS; everything else requires https.
+// the href of the first rel=self link.
 func (r *RemoteActors) webfingerSelfURL(ctx context.Context, userAndHost string) (string, error) {
 	host := userAndHost[strings.IndexByte(userAndHost, '@')+1:]
-	scheme := "https"
-	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.") {
-		scheme = "http"
-	}
 	endpoint := fmt.Sprintf("%s://%s/.well-known/webfinger?resource=%s",
-		scheme, host, url.QueryEscape("acct:"+userAndHost))
+		webfingerScheme(host), host, url.QueryEscape("acct:"+userAndHost))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("%w: webfinger target %q: %v", domain.ErrInvalid, userAndHost, err)

@@ -110,6 +110,45 @@ func TestResolveJunk(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsUserinfoAndFragmentURLs(t *testing.T) {
+	actors := NewRemoteActors()
+	for _, input := range []string{
+		"https://u:p@example.com/ap/actors/catalog",
+		"https://example.com/ap/actors/catalog#main-key",
+	} {
+		_, err := actors.Resolve(context.Background(), input)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("Resolve(%q) error = %v, want domain.ErrInvalid", input, err)
+		}
+	}
+}
+
+func TestWebfingerScheme(t *testing.T) {
+	cases := []struct {
+		host string
+		want string
+	}{
+		{"localhost", "http"},
+		{"localhost:8080", "http"},
+		{"127.0.0.1", "http"},
+		{"127.0.0.1:3000", "http"},
+		{"127.9.9.9", "http"},           // whole 127.0.0.0/8 is loopback
+		{"::1", "http"},                 // bare (unbracketed) loopback literal
+		{"[::1]:8080", "http"},          // bracketed with port, via SplitHostPort
+		{"[::1]", "https"},              // bracketed without port: documented edge, stays https
+		{"127.0.0.1.evil.com", "https"}, // look-alike domain is not loopback
+		{"localhost.evil.com", "https"}, // ditto
+		{"localhost1", "https"},         // ditto
+		{"example.org", "https"},
+		{"example.com:443", "https"},
+	}
+	for _, tc := range cases {
+		if got := webfingerScheme(tc.host); got != tc.want {
+			t.Errorf("webfingerScheme(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+}
+
 func TestResolveUnknownHandle(t *testing.T) {
 	cases := []struct {
 		name    string
