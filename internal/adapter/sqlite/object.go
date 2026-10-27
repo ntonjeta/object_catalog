@@ -36,7 +36,7 @@ func (r *ObjectRepo) Create(ctx context.Context, object domain.Object, entry dom
 	if err != nil {
 		return mapError(err)
 	}
-	if err := replaceTags(ctx, tx, object.ID, object.Tags); err != nil {
+	if err := replaceTagsIn(ctx, tx, objectTagsTable, object.ID, object.Tags); err != nil {
 		return err
 	}
 	images := object.Images
@@ -83,7 +83,7 @@ func (r *ObjectRepo) Update(ctx context.Context, object domain.Object, entry dom
 	if affected == 0 {
 		return domain.ErrNotFound
 	}
-	if err := replaceTags(ctx, tx, object.ID, object.Tags); err != nil {
+	if err := replaceTagsIn(ctx, tx, objectTagsTable, object.ID, object.Tags); err != nil {
 		return err
 	}
 	if err := appendOutboxTx(ctx, tx, entry); err != nil {
@@ -316,20 +316,6 @@ func replaceImages(ctx context.Context, tx *sql.Tx, objectID string, images []do
 // rather than a remote URL or a root-relative public path.
 func isBareFileName(imagePath string) bool {
 	return imagePath != "" && !strings.HasPrefix(imagePath, "/") && !strings.Contains(imagePath, "://")
-}
-
-func replaceTags(ctx context.Context, tx *sql.Tx, objectID string, tags []string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM object_tags WHERE object_id = ?`, objectID); err != nil {
-		return mapError(err)
-	}
-	for _, tag := range tags {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO object_tags (object_id, tag) VALUES (?, ?)`, objectID, tag,
-		); err != nil {
-			return mapError(err)
-		}
-	}
-	return nil
 }
 
 const objectSelect = `SELECT

@@ -50,7 +50,7 @@ func (r *RemoteObjectRepo) Put(ctx context.Context, object domain.RemoteObject) 
 	if err != nil {
 		return mapError(err)
 	}
-	if err := replaceRemoteObjectTags(ctx, tx, object.ID, object.Tags); err != nil {
+	if err := replaceTagsIn(ctx, tx, remoteObjectTagsTable, object.ID, object.Tags); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -69,20 +69,6 @@ func (r *RemoteObjectRepo) Delete(ctx context.Context, id string) error {
 func (r *RemoteObjectRepo) DeleteByPeer(ctx context.Context, peerActorID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM remote_objects WHERE peer_actor_id = ?`, peerActorID)
 	return mapError(err)
-}
-
-func replaceRemoteObjectTags(ctx context.Context, tx *sql.Tx, objectID string, tags []string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_object_tags WHERE object_id = ?`, objectID); err != nil {
-		return mapError(err)
-	}
-	for _, tag := range tags {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO remote_object_tags (object_id, tag) VALUES (?, ?)`, objectID, tag,
-		); err != nil {
-			return mapError(err)
-		}
-	}
-	return nil
 }
 
 var _ usecase.RemoteObjectRepository = (*RemoteObjectRepo)(nil)
