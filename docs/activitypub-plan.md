@@ -1,6 +1,6 @@
 # ActivityPub Federation Plan
 
-Status: in progress  
+Status: PR 1–3 done, PR 4 deferred (to be tackled later)  
 Decision record: [ADR-0002: ActivityPub federation with peer instances](adr/0002-federation.md)
 
 ## Goal
@@ -30,13 +30,14 @@ announcements, and (later) request reservations through the inbox.
   (`ObjectRepository` methods now take a `domain.OutboxEntry`).
 - `GET /ap/outbox` (OrderedCollection, `limit`/`offset`, default 50) and
   `GET /ap/outbox/{id}`; `GET /ap/objects/{id}` serves the live `Article`.
-- `followers` table; `POST /ap/inbox` resolves the remote actor document,
-  handles `Follow`/`Undo` and queues `Accept` (verification comes in PR 3).
+- `followers` table; `POST /ap/inbox` handles `Follow`/`Undo` and queues
+  `Accept`.
 - Delivery: `httpapi.Deliverer` goroutine started in `internal/app`
   (`FederationPoll`, default 5 s), POSTs signed by `github.com/go-fed/httpsig`
   (rsa-sha256 over `(request-target) host date digest`), exponential backoff
-  30 s → 30 min. `GET /ap/outbox` responses themselves are unsigned: peers
-  fetch them publicly; signing applies to outbound requests only.
+  30 s → 30 min (`usecase.RetryDelay`). `GET /ap/outbox` responses themselves
+  are unsigned: peers fetch them publicly; signing applies to outbound
+  requests only.
 
 ### PR 3 — Inbox security (done)
 
@@ -54,15 +55,53 @@ announcements, and (later) request reservations through the inbox.
   Federation use case, unknown types are dropped after processing, failures
   retry with `usecase.RetryDelay`.
 
-### PR 4 — Reservation over federation
+### PR 4 — Reservation over federation (deferred)
 
 - Remote `Create`/`Propose` note mapped onto `domain.Reservation` plus the
   existing admin approval flow; `Accept`/`Reject` sent to the requester inbox.
 - E2E: two in-process instances, follow + reserve round-trip.
 
+Implementation notes for when PR 4 is picked up:
+
+- The inbox pipeline already parses `type`/`actor`/`object` into
+  `inbox_events` columns (`decodeInboxEvent`); `Federation.ProcessPendingInbox`
+  currently drops non-Follow/Undo types — add the reservation branch there.
+- The reservation object must be dereferenced: a `Create`/`Propose` carries
+  an object whose id is a local `Article` (`/ap/objects/{id}`); map the id
+  back to the catalog object.
+- Reservations arrive from a non-follower actor: the `Accept`/`Reject` reply
+  must address the requester's inbox specifically, not the follower broadcast
+  fan-out. Options: a per-entry `recipient` column on `outbox` (deliverer
+  already reads followers per entry; branch when set) or a direct signed POST
+  reusing the Deliverer's signer plumbing.
+- Pending reservations need admin visibility in `web/` (existing approval
+  flow covers confirm/cancel; show the remote requester).
+- Trust boundary: PR 4 should re-validate the signer against the actor the
+  `Reserve` targets and rate-limit pending reservations per remote actor to
+  avoid queue spam.
+
 ## Testing
 
-- Unit tests for `Identity` (key generation, persistence, reuse) with fakes in
-  `internal/usecase/fakes_test.go`.
-- E2E tests for WebFinger and the actor document in `e2e/activitypub_test.go`.
-- All four verification commands from AGENTS.md must pass.
+Implemented:
+
+- Unit tests: `Identity` (key generation/persistence/reuse), `Federation`
+  (follow, undo, enqueue validation, dedup, processing, backoff), ActivityPub
+  serialization, SQLite repos (outbox, followers, inbox events, key cache).
+- E2E (`e2e/activitypub_test.go`): WebFinger, actor document, outbox
+  announcements, signed follow → accept → delivery round-trip between two
+  in-process instances, unsigned/tampered/mismatched-signer rejection,
+  activity-id dedup.
+- All four AGENTS.md verification commands pass as of this stopping point.
+
+Outstanding (PR 4):
+
+- Unit: reservation request parsing/validation; conflict with busy/loaned
+  objects.
+- E2E: follow + reserve round-trip, Accept/Reject back to requester.
+
+## Current state at this stop
+
+- PR 1–3 complete and race-tested; changes uncommitted in the
+  `activityPub` worktree (`feat(federation)` commits pending).
+- Known staged risk: inbox processing trusts the verified signer/actor pair;
+  no rate limiting yet (see PR 4 notes).
