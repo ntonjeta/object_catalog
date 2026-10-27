@@ -15,13 +15,15 @@ const (
 )
 
 type Objects struct {
-	objects    ObjectRepository
-	categories CategoryRepository
-	photos     PhotoStore
+	objects      ObjectRepository
+	categories   CategoryRepository
+	photos       PhotoStore
+	reservations ReservationRepository
+	activities   ActivityRepository
 }
 
-func NewObjects(objects ObjectRepository, categories CategoryRepository, photos PhotoStore) *Objects {
-	return &Objects{objects: objects, categories: categories, photos: photos}
+func NewObjects(objects ObjectRepository, categories CategoryRepository, photos PhotoStore, reservations ReservationRepository, activities ActivityRepository) *Objects {
+	return &Objects{objects: objects, categories: categories, photos: photos, reservations: reservations, activities: activities}
 }
 
 type CreateObjectInput struct {
@@ -54,11 +56,6 @@ type ListObjectsInput struct {
 type SetObjectBusyInput struct {
 	Busy      bool
 	BusyUntil *time.Time
-}
-
-type ReserveObjectInput struct {
-	From  time.Time
-	Until *time.Time
 }
 
 func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.Object, error) {
@@ -190,6 +187,7 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	if oldImagePath != object.ImagePath {
 		uc.deletePhoto(ctx, oldImagePath)
 	}
+	uc.attachReservation(ctx, &object, time.Now().UTC())
 	return object, nil
 }
 
@@ -198,7 +196,9 @@ func (uc *Objects) Get(ctx context.Context, id string) (domain.Object, error) {
 	if err != nil {
 		return domain.Object{}, err
 	}
-	normalizeBusy(&object, time.Now().UTC())
+	now := time.Now().UTC()
+	normalizeBusy(&object, now)
+	uc.attachReservation(ctx, &object, now)
 	return object, nil
 }
 
@@ -209,6 +209,10 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 	}
 	now := time.Now().UTC()
 	normalizeBusy(&object, now)
+	actives, err := uc.reservations.ActiveByObject(ctx, id)
+	if err != nil {
+		return domain.Object{}, err
+	}
 	if input.Busy {
 		if input.BusyUntil == nil {
 			return domain.Object{}, fmt.Errorf("%w: busy_until is required when busy is true", domain.ErrInvalid)
@@ -217,54 +221,46 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 		if !until.After(now) {
 			return domain.Object{}, fmt.Errorf("%w: busy_until must be in the future", domain.ErrInvalid)
 		}
+		for _, reservation := range actives {
+			if reservation.TakesAt(now) {
+				return domain.Object{}, fmt.Errorf("%w: confirmed reservation is active %s", domain.ErrConflict, reservationWindow(reservation))
+			}
+			if reservation.Status == domain.ReservationPending && reservation.From.Before(until) {
+				return domain.Object{}, fmt.Errorf("%w: loan would overlap pending reservation starting %s", domain.ErrConflict, reservation.From.Format(time.RFC3339))
+			}
+		}
 		object.Busy = true
 		object.BusyUntil = &until
-		object.ReservedFrom = nil
 	} else {
 		object.Busy = false
 		object.BusyUntil = nil
-		object.ReservedFrom = nil
 	}
 	object.UpdatedAt = now
 	if err := uc.objects.Update(ctx, object); err != nil {
 		return domain.Object{}, err
 	}
+	activityType := domain.ActivityObjectBusy
+	detail := "busy until " + formatOptionalTime(object.BusyUntil)
+	if !input.Busy {
+		activityType = domain.ActivityObjectReleased
+		detail = "released"
+	}
+	if err := recordActivity(ctx, uc.activities, activityType, id, "", detail, now); err != nil {
+		return domain.Object{}, err
+	}
+	uc.attachReservation(ctx, &object, now)
 	return object, nil
 }
 
-// Reserve marks an object busy from a future start time. The object stays
-// available until the reservation starts; Until is optional and leaves the
-// object taken indefinitely once started.
-func (uc *Objects) Reserve(ctx context.Context, id string, input ReserveObjectInput) (domain.Object, error) {
-	object, err := uc.objects.ByID(ctx, id)
-	if err != nil {
-		return domain.Object{}, err
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return "(open ended)"
 	}
-	now := time.Now().UTC()
-	normalizeBusy(&object, now)
-	if object.IsBusyAt(now) {
-		return domain.Object{}, fmt.Errorf("%w: object is already busy", domain.ErrConflict)
-	}
-	from := input.From.UTC()
-	if !from.After(now) {
-		return domain.Object{}, fmt.Errorf("%w: reservation start must be in the future", domain.ErrInvalid)
-	}
-	var until *time.Time
-	if input.Until != nil {
-		end := input.Until.UTC()
-		if !end.After(from) {
-			return domain.Object{}, fmt.Errorf("%w: reservation end must be after the start", domain.ErrInvalid)
-		}
-		until = &end
-	}
-	object.Busy = true
-	object.ReservedFrom = &from
-	object.BusyUntil = until
-	object.UpdatedAt = now
-	if err := uc.objects.Update(ctx, object); err != nil {
-		return domain.Object{}, err
-	}
-	return object, nil
+	return value.Format(time.RFC3339)
+}
+
+func reservationWindow(reservation domain.Reservation) string {
+	return reservation.From.Format(time.RFC3339) + " → " + formatOptionalTime(reservation.Until)
 }
 
 func (uc *Objects) Delete(ctx context.Context, id string) error {
@@ -302,8 +298,37 @@ func (uc *Objects) List(ctx context.Context, input ListObjectsInput) ([]domain.O
 	now := time.Now().UTC()
 	for i := range objects {
 		normalizeBusy(&objects[i], now)
+		uc.attachReservation(ctx, &objects[i], now)
 	}
 	return objects, total, nil
+}
+
+// attachReservation loads the object's earliest live reservation, lapses
+// stale pending records, and best-effort persists the transition. A failed
+// lookup simply leaves Reservation nil.
+func (uc *Objects) attachReservation(ctx context.Context, object *domain.Object, now time.Time) {
+	actives, err := uc.reservations.ActiveByObject(ctx, object.ID)
+	if err != nil {
+		return
+	}
+	var next *domain.Reservation
+	for _, reservation := range actives {
+		updated := lapseStaleReservation(ctx, uc.reservations, uc.activities, reservation, now)
+		if updated.Status == domain.ReservationLapsed {
+			continue
+		}
+		if next == nil || updated.From.Before(next.From) {
+			item := updated
+			next = &item
+		}
+	}
+	object.Reservation = next
+	if next != nil && next.TakesAt(now) {
+		object.Busy = true
+		if next.Until != nil && (object.BusyUntil == nil || next.Until.After(*object.BusyUntil)) {
+			object.BusyUntil = next.Until
+		}
+	}
 }
 
 func (uc *Objects) category(ctx context.Context, id string) (*domain.Category, error) {
@@ -333,9 +358,8 @@ func (uc *Objects) deletePhoto(ctx context.Context, path string) {
 }
 
 func normalizeBusy(object *domain.Object, now time.Time) {
-	if object.Busy && object.BusyUntil != nil && !object.BusyUntil.After(now) {
+	if object.Busy && !object.IsBusyAt(now) {
 		object.Busy = false
 		object.BusyUntil = nil
-		object.ReservedFrom = nil
 	}
 }

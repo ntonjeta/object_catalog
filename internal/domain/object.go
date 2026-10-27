@@ -21,26 +21,32 @@ type Object struct {
 	Name         string
 	Description  string
 	ImagePath    string
-	Busy         bool
-	BusyUntil    *time.Time
-	ReservedFrom *time.Time
-	Category     *Category
-	Tags         []string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	Busy        bool
+	BusyUntil   *time.Time
+	Category    *Category
+	Tags        []string
+	Reservation *Reservation
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-// IsBusyAt reports whether the object is taken at the given time. An object
-// without an expiry stays busy until it is explicitly released. A reserved
-// object stays available until its reservation starts.
+// IsBusyAt reports whether the object is on loan at the given time. An object
+// without an expiry stays busy until it is explicitly released. Reservation
+// windows are evaluated separately; see Object.EffectiveBusyAt.
 func (o Object) IsBusyAt(now time.Time) bool {
 	if !o.Busy {
 		return false
 	}
-	if o.ReservedFrom != nil && now.Before(*o.ReservedFrom) {
-		return false
-	}
 	return o.BusyUntil == nil || o.BusyUntil.After(now)
+}
+
+// EffectiveBusyAt reports whether the object is unavailable at the given
+// time, either on loan or inside a confirmed reservation window.
+func (o Object) EffectiveBusyAt(now time.Time) bool {
+	if o.IsBusyAt(now) {
+		return true
+	}
+	return o.Reservation != nil && o.Reservation.TakesAt(now)
 }
 
 func NormalizeObjectName(name string) string {

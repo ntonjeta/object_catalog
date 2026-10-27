@@ -31,6 +31,24 @@ type CategoryRepository interface {
 	Delete(ctx context.Context, id string) error
 }
 
+type ReservationRepository interface {
+	Create(ctx context.Context, reservation domain.Reservation) error
+	Update(ctx context.Context, reservation domain.Reservation) error
+	ByID(ctx context.Context, id string) (domain.Reservation, error)
+	ActiveByObject(ctx context.Context, objectID string) ([]domain.Reservation, error)
+}
+
+type ActivityFilter struct {
+	ObjectID string
+	Limit    int
+	Offset   int
+}
+
+type ActivityRepository interface {
+	Create(ctx context.Context, activity domain.Activity) error
+	List(ctx context.Context, filter ActivityFilter) ([]domain.Activity, int, error)
+}
+
 type ObjectFilter struct {
 	Query    string
 	Category string
