@@ -236,7 +236,9 @@ func (f *Federation) Peers(ctx context.Context) ([]domain.Peer, error)
 - [ ] **Step 5: Wire app.go**: `peerRepo := sqlite.NewPeerRepo(db)`, `remoteObjectRepo := sqlite.NewRemoteObjectRepo(db)`, pass into `usecase.NewFederation(...)`. Run full suite + race: `gofmt -l . && go vet ./... && go test ./... && go test -race ./...`
 - [ ] **Step 6: Commit** — `feat(federation): join and leave peer instances via outbox queue` (body: follows ride Deliverer backoff so restarts self-heal).
 
----### Task 5: Inbox ingest — Accept tracking + peer article mirror
+---
+
+### Task 5: Inbox ingest — Accept tracking + peer article mirror
 
 **Files:**
 - Modify: `internal/usecase/federation.go` (`ProcessPendingInbox`)
