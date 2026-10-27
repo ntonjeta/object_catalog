@@ -48,15 +48,25 @@ type FollowRequest struct {
 }
 
 type Federation struct {
-	outbox    OutboxRepository
-	followers FollowerRepository
-	actors    RemoteActorRepository
-	inbox     InboxEventRepository
-	identity  *Identity
+	outbox        OutboxRepository
+	followers     FollowerRepository
+	actors        RemoteActorRepository
+	inbox         InboxEventRepository
+	identity      *Identity
+	peers         PeerRepository
+	remoteObjects RemoteObjectRepository
 }
 
-func NewFederation(outbox OutboxRepository, followers FollowerRepository, actors RemoteActorRepository, inbox InboxEventRepository, identity *Identity) *Federation {
-	return &Federation{outbox: outbox, followers: followers, actors: actors, inbox: inbox, identity: identity}
+func NewFederation(outbox OutboxRepository, followers FollowerRepository, actors RemoteActorRepository, inbox InboxEventRepository, identity *Identity, peers PeerRepository, remoteObjects RemoteObjectRepository) *Federation {
+	return &Federation{
+		outbox:        outbox,
+		followers:     followers,
+		actors:        actors,
+		inbox:         inbox,
+		identity:      identity,
+		peers:         peers,
+		remoteObjects: remoteObjects,
+	}
 }
 
 // EnqueueActivity stores a signature-verified incoming activity for
@@ -210,6 +220,88 @@ func (f *Federation) Unfollow(ctx context.Context, req FollowRequest) error {
 
 func (f *Federation) Followers(ctx context.Context) ([]domain.Follower, error) {
 	return f.followers.List(ctx)
+}
+
+// AddPeer joins a remote catalog instance: it resolves the handle or actor
+// URL, stores the peer as pending and queues the Follow activity. Follows
+// ride the Deliverer backoff, so restarts self-heal. Nothing is stored when
+// resolution fails; joining requires a live target.
+func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return domain.Peer{}, fmt.Errorf("%w: peer target is required", domain.ErrInvalid)
+	}
+	remote, err := f.actors.Resolve(ctx, target)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalid) {
+			return domain.Peer{}, err
+		}
+		return domain.Peer{}, fmt.Errorf("%w: could not resolve peer %q", domain.ErrNotFound, target)
+	}
+	own, err := f.identity.Actor(ctx)
+	if err != nil {
+		return domain.Peer{}, err
+	}
+	if remote.ID == own.ID {
+		return domain.Peer{}, fmt.Errorf("%w: cannot follow this instance", domain.ErrInvalid)
+	}
+	id, err := domain.NewID()
+	if err != nil {
+		return domain.Peer{}, fmt.Errorf("generate peer id: %w", err)
+	}
+	now := time.Now().UTC()
+	peer := domain.Peer{
+		ID:               id,
+		ActorID:          remote.ID,
+		InboxURL:         remote.InboxURL,
+		FollowActivityID: f.identity.BaseURL() + "/ap/outbox/" + id,
+		State:            domain.PeerPending,
+		CreatedAt:        now,
+	}
+	if err := f.peers.Upsert(ctx, peer); err != nil {
+		return domain.Peer{}, err
+	}
+	if err := f.outbox.Append(ctx, domain.OutboxEntry{
+		ID:        id,
+		Kind:      domain.OutboxFollow,
+		Target:    remote.ID,
+		FollowID:  peer.FollowActivityID,
+		Published: now,
+	}); err != nil {
+		return domain.Peer{}, err
+	}
+	return peer, nil
+}
+
+// RemovePeer leaves a peer instance: it queues the Undo of the stored follow,
+// drops the peer row and cascades every object mirrored from it.
+func (f *Federation) RemovePeer(ctx context.Context, id string) error {
+	peer, err := f.peers.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	undoID, err := domain.NewID()
+	if err != nil {
+		return fmt.Errorf("generate outbox id: %w", err)
+	}
+	if err := f.outbox.Append(ctx, domain.OutboxEntry{
+		ID:        undoID,
+		Kind:      domain.OutboxUndo,
+		Target:    peer.ActorID,
+		FollowID:  peer.FollowActivityID,
+		Published: time.Now().UTC(),
+	}); err != nil {
+		return err
+	}
+	if err := f.peers.Remove(ctx, id); err != nil {
+		return err
+	}
+	return f.remoteObjects.DeleteByPeer(ctx, peer.ActorID)
+}
+
+// Peers lists joined peer instances oldest first.
+func (f *Federation) Peers(ctx context.Context) ([]domain.Peer, error) {
+	return f.peers.List(ctx)
 }
 
 // Outbox lists entries newest first.

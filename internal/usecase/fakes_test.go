@@ -496,7 +496,10 @@ func (f *fakeFollowers) List(_ context.Context) ([]domain.Follower, error) {
 
 type fakeRemoteActors struct {
 	actors map[string]domain.RemoteActor
-	err    error
+	// resolved, when non-zero, is what Resolve returns regardless of the
+	// actors fixture map. FetchActor ignores it.
+	resolved domain.RemoteActor
+	err      error
 }
 
 func newFakeRemoteActors() *fakeRemoteActors {
@@ -515,9 +518,20 @@ func (f *fakeRemoteActors) FetchActor(_ context.Context, actorID string) (domain
 }
 
 // Resolve mirrors the adapter port: the fake has no WebFinger, so fixture
-// input is treated as a direct actor id.
-func (f *fakeRemoteActors) Resolve(ctx context.Context, input string) (domain.RemoteActor, error) {
-	return f.FetchActor(ctx, input)
+// input is treated as a direct actor id. The resolved fixture short-circuits
+// the map lookup so tests can return an actor id the input does not name.
+func (f *fakeRemoteActors) Resolve(_ context.Context, input string) (domain.RemoteActor, error) {
+	if f.err != nil {
+		return domain.RemoteActor{}, f.err
+	}
+	if f.resolved != (domain.RemoteActor{}) {
+		return f.resolved, nil
+	}
+	actor, ok := f.actors[input]
+	if !ok {
+		return domain.RemoteActor{}, fmt.Errorf("fetch actor %q: not found", input)
+	}
+	return actor, nil
 }
 
 type fakeInboxEvents struct {
@@ -571,4 +585,125 @@ func (f *fakeInboxEvents) MarkAttempt(_ context.Context, id string, attempts int
 		}
 	}
 	return domain.ErrNotFound
+}
+
+type fakePeers struct {
+	peers    []domain.Peer
+	removed  []string
+	accepted []string
+}
+
+func newFakePeers() *fakePeers {
+	return &fakePeers{}
+}
+
+// Upsert mimics the sqlite repo: keyed on actor id, a re-join refreshes the
+// inbox URL, follow activity id and state while keeping the stored id and
+// created time.
+func (f *fakePeers) Upsert(_ context.Context, peer domain.Peer) error {
+	for i, existing := range f.peers {
+		if existing.ActorID == peer.ActorID {
+			existing.InboxURL = peer.InboxURL
+			existing.FollowActivityID = peer.FollowActivityID
+			existing.State = peer.State
+			f.peers[i] = existing
+			return nil
+		}
+	}
+	f.peers = append(f.peers, peer)
+	return nil
+}
+
+func (f *fakePeers) MarkAccepted(_ context.Context, actorID string) error {
+	for i, peer := range f.peers {
+		if peer.ActorID == actorID {
+			f.peers[i].State = domain.PeerAccepted
+			f.accepted = append(f.accepted, actorID)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakePeers) ByFollowActivityID(_ context.Context, followActivityID string) (domain.Peer, error) {
+	for _, peer := range f.peers {
+		if peer.FollowActivityID == followActivityID {
+			return peer, nil
+		}
+	}
+	return domain.Peer{}, domain.ErrNotFound
+}
+
+func (f *fakePeers) ByID(_ context.Context, id string) (domain.Peer, error) {
+	for _, peer := range f.peers {
+		if peer.ID == id {
+			return peer, nil
+		}
+	}
+	return domain.Peer{}, domain.ErrNotFound
+}
+
+func (f *fakePeers) Remove(_ context.Context, id string) error {
+	for i, peer := range f.peers {
+		if peer.ID == id {
+			f.peers = append(f.peers[:i], f.peers[i+1:]...)
+			f.removed = append(f.removed, id)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakePeers) List(_ context.Context) ([]domain.Peer, error) {
+	peers := make([]domain.Peer, len(f.peers))
+	copy(peers, f.peers)
+	return peers, nil
+}
+
+type fakeRemoteObjects struct {
+	objects      []domain.RemoteObject
+	puts         []domain.RemoteObject
+	deleted      []string
+	deletedPeers []string
+}
+
+func newFakeRemoteObjects() *fakeRemoteObjects {
+	return &fakeRemoteObjects{}
+}
+
+// Put mirrors the sqlite upsert: the row for the given id is replaced whole.
+func (f *fakeRemoteObjects) Put(_ context.Context, object domain.RemoteObject) error {
+	for i, existing := range f.objects {
+		if existing.ID == object.ID {
+			f.objects[i] = object
+			f.puts = append(f.puts, object)
+			return nil
+		}
+	}
+	f.objects = append(f.objects, object)
+	f.puts = append(f.puts, object)
+	return nil
+}
+
+func (f *fakeRemoteObjects) Delete(_ context.Context, id string) error {
+	for i, object := range f.objects {
+		if object.ID == id {
+			f.objects = append(f.objects[:i], f.objects[i+1:]...)
+			f.deleted = append(f.deleted, id)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeRemoteObjects) DeleteByPeer(_ context.Context, peerActorID string) error {
+	kept := make([]domain.RemoteObject, 0, len(f.objects))
+	for _, object := range f.objects {
+		if object.PeerActorID != peerActorID {
+			kept = append(kept, object)
+		}
+	}
+	f.objects = kept
+	f.deletedPeers = append(f.deletedPeers, peerActorID)
+	return nil
 }

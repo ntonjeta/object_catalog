@@ -104,13 +104,15 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	followerRepo := sqlite.NewFollowerRepo(db)
 	inboxRepo := sqlite.NewInboxRepo(db)
 	remoteKeyRepo := sqlite.NewRemoteKeyRepo(db)
+	peerRepo := sqlite.NewPeerRepo(db)
+	remoteObjectRepo := sqlite.NewRemoteObjectRepo(db)
 
 	auth := usecase.NewAuth(users, sessions, cfg.SessionTTL)
 	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
 	identity := usecase.NewIdentity(instanceKeyRepo, baseURL)
 	remoteActors := activitypub.NewRemoteActors()
-	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity)
+	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity, peerRepo, remoteObjectRepo)
 	verifier := activitypub.NewSignatureVerifier(remoteKeyRepo, remoteActors)
 
 	catalog := httpapi.New(auth, objects, categories, httpapi.Config{

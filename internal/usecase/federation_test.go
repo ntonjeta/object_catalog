@@ -4,24 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"biblio-oggetto/internal/domain"
 )
 
-func newTestFederation() (*Federation, *fakeOutbox, *fakeFollowers, *fakeRemoteActors, *fakeInboxEvents) {
+func newTestFederation() (*Federation, *fakeOutbox, *fakeFollowers, *fakeRemoteActors, *fakeInboxEvents, *fakePeers, *fakeRemoteObjects) {
 	outbox := newFakeOutbox()
 	followers := newFakeFollowers()
 	actors := newFakeRemoteActors()
 	inbox := newFakeInboxEvents()
+	peers := newFakePeers()
+	remoteObjects := newFakeRemoteObjects()
 	identity := NewIdentity(&fakeInstanceKeys{}, "https://catalog.example.com")
-	return NewFederation(outbox, followers, actors, inbox, identity), outbox, followers, actors, inbox
+	return NewFederation(outbox, followers, actors, inbox, identity, peers, remoteObjects), outbox, followers, actors, inbox, peers, remoteObjects
 }
 
 func TestFederationFollowAddsFollowerAndQueuesAccept(t *testing.T) {
 	ctx := context.Background()
-	federation, outbox, followers, actors, _ := newTestFederation()
+	federation, outbox, followers, actors, _, _, _ := newTestFederation()
 	actors.actors["https://remote.example/alice"] = domain.RemoteActor{
 		ID:       "https://remote.example/alice",
 		InboxURL: "https://remote.example/inbox/alice",
@@ -57,7 +60,7 @@ func TestFederationFollowAddsFollowerAndQueuesAccept(t *testing.T) {
 
 func TestFederationFollowValidatesInput(t *testing.T) {
 	ctx := context.Background()
-	federation, outbox, followers, _, _ := newTestFederation()
+	federation, outbox, followers, _, _, _, _ := newTestFederation()
 
 	if err := federation.Follow(ctx, FollowRequest{ActorID: ""}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("empty actor error = %v, want ErrInvalid", err)
@@ -71,14 +74,14 @@ func TestFederationFollowValidatesInput(t *testing.T) {
 }
 
 func TestFederationUnfollowMissingIsIgnored(t *testing.T) {
-	federation, _, _, _, _ := newTestFederation()
+	federation, _, _, _, _, _, _ := newTestFederation()
 	if err := federation.Unfollow(context.Background(), FollowRequest{ActorID: "https://remote.example/ghost"}); err != nil {
 		t.Fatalf("unfollow missing: %v", err)
 	}
 }
 
 func TestFederationOutboxLimitValidation(t *testing.T) {
-	federation, _, _, _, _ := newTestFederation()
+	federation, _, _, _, _, _, _ := newTestFederation()
 	ctx := context.Background()
 
 	if _, _, err := federation.Outbox(ctx, 101, 0); !errors.Is(err, domain.ErrInvalid) {
@@ -94,7 +97,7 @@ func TestFederationOutboxLimitValidation(t *testing.T) {
 
 func TestFederationDeliveryMarkers(t *testing.T) {
 	ctx := context.Background()
-	federation, outbox, _, _, _ := newTestFederation()
+	federation, outbox, _, _, _, _, _ := newTestFederation()
 	outbox.entries = append(outbox.entries, domain.OutboxEntry{
 		ID: "e1", Kind: domain.OutboxCreate, Published: time.Now().UTC(),
 	})
@@ -121,7 +124,7 @@ func TestFederationDeliveryMarkers(t *testing.T) {
 
 func TestFederationEnqueueActivityValidation(t *testing.T) {
 	ctx := context.Background()
-	federation, _, _, _, inbox := newTestFederation()
+	federation, _, _, _, inbox, _, _ := newTestFederation()
 
 	payload := []byte(`{"id":"https://remote.example/f/1","type":"Follow","actor":"https://remote.example/alice","object":"https://catalog.example.com/ap/actors/catalog"}`)
 	if err := federation.EnqueueActivity(ctx, "https://remote.example/alice", payload); err != nil {
@@ -154,7 +157,7 @@ func TestFederationEnqueueActivityValidation(t *testing.T) {
 
 func TestFederationProcessPendingInbox(t *testing.T) {
 	ctx := context.Background()
-	federation, outbox, followers, actors, inbox := newTestFederation()
+	federation, outbox, followers, actors, inbox, _, _ := newTestFederation()
 	actorID, err := federation.ActorID(ctx)
 	if err != nil {
 		t.Fatalf("actor id: %v", err)
@@ -210,5 +213,196 @@ func TestFederationProcessPendingInbox(t *testing.T) {
 		if event.ID == "https://remote.example/f/3" && event.Attempts != 1 {
 			t.Fatalf("failing event retried inside backoff window: attempts %d", event.Attempts)
 		}
+	}
+}
+
+func TestAddPeerStoresPendingAndQueuesFollow(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, _ := newTestFederation()
+	actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+		ID:       "https://peer/ap/actors/catalog",
+		InboxURL: "https://peer/ap/inbox",
+	}
+
+	peer, err := federation.AddPeer(ctx, "  https://peer/ap/actors/catalog  ")
+	if err != nil {
+		t.Fatalf("add peer: %v", err)
+	}
+	if len(peers.peers) != 1 {
+		t.Fatalf("peers = %+v, want one stored peer", peers.peers)
+	}
+	if peers.peers[0] != peer {
+		t.Fatalf("stored peer = %+v, want %+v", peers.peers[0], peer)
+	}
+	if peer.ActorID != "https://peer/ap/actors/catalog" || peer.InboxURL != "https://peer/ap/inbox" {
+		t.Fatalf("peer = %+v", peer)
+	}
+	if peer.State != domain.PeerPending {
+		t.Fatalf("state = %q, want pending", peer.State)
+	}
+	wantFollowID := "https://catalog.example.com/ap/outbox/" + peer.ID
+	if peer.FollowActivityID != wantFollowID {
+		t.Fatalf("follow activity id = %q, want %q", peer.FollowActivityID, wantFollowID)
+	}
+	if len(outbox.appended) != 1 {
+		t.Fatalf("appended = %+v, want one follow", outbox.appended)
+	}
+	entry := outbox.appended[0]
+	if entry.Kind != domain.OutboxFollow || entry.Target != peer.ActorID {
+		t.Fatalf("entry = %+v, want follow targeting the peer actor", entry)
+	}
+	if entry.ID != peer.ID || entry.FollowID != wantFollowID {
+		t.Fatalf("entry = %+v, want id %q and follow id %q", entry, peer.ID, wantFollowID)
+	}
+}
+
+func TestAddPeerValidatesTarget(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, _ := newTestFederation()
+	ownID, err := federation.ActorID(ctx)
+	if err != nil {
+		t.Fatalf("actor id: %v", err)
+	}
+
+	if _, err := federation.AddPeer(ctx, "   "); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("empty target error = %v, want ErrInvalid", err)
+	}
+	actors.err = fmt.Errorf("%w: target must be a handle or absolute URL", domain.ErrInvalid)
+	if _, err := federation.AddPeer(ctx, "not a target"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("resolver ErrInvalid error = %v, want ErrInvalid", err)
+	}
+	actors.err = nil
+	actors.resolved = domain.RemoteActor{ID: ownID, InboxURL: "https://catalog.example.com/ap/inbox"}
+	if _, err := federation.AddPeer(ctx, "catalog@catalog.example.com"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("self target error = %v, want ErrInvalid", err)
+	}
+	if len(peers.peers) != 0 || len(outbox.appended) != 0 {
+		t.Fatalf("invalid AddPeer wrote peers %+v / outbox %+v", peers.peers, outbox.appended)
+	}
+}
+
+func TestAddPeerUnresolvableTarget(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, _ := newTestFederation()
+	actors.err = errors.New("dial tcp: lookup peer.example: no such host")
+
+	_, err := federation.AddPeer(ctx, "handle@peer.example")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "handle@peer.example") {
+		t.Fatalf("error = %q, want it to name the target", err)
+	}
+	if len(peers.peers) != 0 || len(outbox.appended) != 0 {
+		t.Fatalf("failed join wrote peers %+v / outbox %+v", peers.peers, outbox.appended)
+	}
+}
+
+func TestAddPeerRejoinResetsPending(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, _ := newTestFederation()
+	actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+		ID:       "https://peer/ap/actors/catalog",
+		InboxURL: "https://peer/ap/inbox",
+	}
+	first, err := federation.AddPeer(ctx, "https://peer/ap/actors/catalog")
+	if err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	if err := peers.MarkAccepted(ctx, first.ActorID); err != nil {
+		t.Fatalf("mark accepted: %v", err)
+	}
+	actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+		ID:       "https://peer/ap/actors/catalog",
+		InboxURL: "https://peer/ap/inbox/v2",
+	}
+
+	second, err := federation.AddPeer(ctx, "https://peer/ap/actors/catalog")
+	if err != nil {
+		t.Fatalf("rejoin: %v", err)
+	}
+	if len(peers.peers) != 1 {
+		t.Fatalf("peers = %+v, want still one peer", peers.peers)
+	}
+	stored := peers.peers[0]
+	if stored.State != domain.PeerPending {
+		t.Fatalf("stored state = %q, want pending", stored.State)
+	}
+	if stored.InboxURL != "https://peer/ap/inbox/v2" || stored.FollowActivityID != second.FollowActivityID {
+		t.Fatalf("stored peer = %+v, want refreshed from %+v", stored, second)
+	}
+	if len(outbox.appended) != 2 {
+		t.Fatalf("appended = %+v, want two follow entries", outbox.appended)
+	}
+	for _, entry := range outbox.appended {
+		if entry.Kind != domain.OutboxFollow || entry.Target != first.ActorID {
+			t.Fatalf("entry = %+v, want follow targeting the peer actor", entry)
+		}
+	}
+	if outbox.appended[1].ID != second.ID || outbox.appended[1].FollowID != second.FollowActivityID {
+		t.Fatalf("second entry = %+v, want id %q and follow id %q", outbox.appended[1], second.ID, second.FollowActivityID)
+	}
+}
+
+func TestRemovePeerQueuesUndoAndCascades(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, remoteObjects := newTestFederation()
+	actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+		ID:       "https://peer/ap/actors/catalog",
+		InboxURL: "https://peer/ap/inbox",
+	}
+	peer, err := federation.AddPeer(ctx, "https://peer/ap/actors/catalog")
+	if err != nil {
+		t.Fatalf("add peer: %v", err)
+	}
+	remoteObjects.objects = append(remoteObjects.objects, domain.RemoteObject{
+		ID: "https://peer/ap/objects/1", PeerActorID: peer.ActorID,
+	})
+
+	if err := federation.RemovePeer(ctx, peer.ID); err != nil {
+		t.Fatalf("remove peer: %v", err)
+	}
+	if len(peers.peers) != 0 {
+		t.Fatalf("peers = %+v, want empty", peers.peers)
+	}
+	if len(outbox.appended) != 2 {
+		t.Fatalf("appended = %+v, want follow + undo", outbox.appended)
+	}
+	entry := outbox.appended[1]
+	if entry.Kind != domain.OutboxUndo || entry.Target != peer.ActorID || entry.FollowID != peer.FollowActivityID {
+		t.Fatalf("undo entry = %+v", entry)
+	}
+	if entry.ID == peer.ID {
+		t.Fatalf("undo entry reuses peer id %q", entry.ID)
+	}
+	if len(remoteObjects.deletedPeers) != 1 || remoteObjects.deletedPeers[0] != peer.ActorID {
+		t.Fatalf("delete-by-peer calls = %v, want [%s]", remoteObjects.deletedPeers, peer.ActorID)
+	}
+	if len(remoteObjects.objects) != 0 {
+		t.Fatalf("remote objects = %+v, want cascaded away", remoteObjects.objects)
+	}
+
+	if err := federation.RemovePeer(ctx, "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unknown id error = %v, want ErrNotFound", err)
+	}
+	if len(outbox.appended) != 2 {
+		t.Fatalf("failed removal appended entries: %+v", outbox.appended)
+	}
+}
+
+func TestPeersLists(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, _, peers, _ := newTestFederation()
+	peers.peers = []domain.Peer{
+		{ID: "p1", ActorID: "https://a.example/ap/actors/catalog", State: domain.PeerAccepted},
+		{ID: "p2", ActorID: "https://b.example/ap/actors/catalog", State: domain.PeerPending},
+	}
+
+	listed, err := federation.Peers(ctx)
+	if err != nil {
+		t.Fatalf("list peers: %v", err)
+	}
+	if len(listed) != 2 || listed[0].ID != "p1" || listed[1].ID != "p2" {
+		t.Fatalf("listed = %+v, want the two seeded peers in order", listed)
 	}
 }
