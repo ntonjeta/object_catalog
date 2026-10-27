@@ -149,9 +149,11 @@ func marshalActivity(entry domain.OutboxEntry, actorID, baseURL string) ([]byte,
 	case domain.OutboxFollow:
 		activity.Type = "Follow"
 		activity.Object = entry.Target
+		activity.To = nil
 	case domain.OutboxUndo:
 		activity.Type = "Undo"
 		activity.Object = entry.Target
+		activity.To = nil
 	}
 	return json.Marshal(activity)
 }

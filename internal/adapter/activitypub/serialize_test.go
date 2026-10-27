@@ -37,6 +37,10 @@ func TestMarshalActivityCreate(t *testing.T) {
 	if activity["type"] != "Create" {
 		t.Fatalf("activity = %+v", activity)
 	}
+	to, ok := activity["to"].([]any)
+	if !ok || len(to) != 1 || to[0] != asPublic {
+		t.Fatalf("to = %#v, want [Public] for broadcast", activity["to"])
+	}
 	if activity["id"] != "https://catalog.example.com/ap/outbox/act1" {
 		t.Fatalf("activity id = %v", activity["id"])
 	}
@@ -149,6 +153,9 @@ func assertFollowShape(t *testing.T, entry domain.OutboxEntry, wantType string) 
 	}
 	if activity["id"] != "https://us.example/ap/outbox/e1" {
 		t.Fatalf("id = %v", activity["id"])
+	}
+	if to, ok := activity["to"]; ok {
+		t.Fatalf("to = %v, want field absent for direct message", to)
 	}
 }
 
