@@ -122,12 +122,17 @@ each other".
   whose actor matches → peer becomes `accepted`.
 - `Create`/`Update`/`Delete` from an actor in state `accepted` → parse the
   article from the stored payload and upsert/delete `RemoteObject`.
+  `Delete` must name an id sharing the announcing peer's origin — one
+  peer may not tombstone another's mirrors (ruling R7) — and an unknown
+  id is dropped, not errored, because retried duplicate deliveries are
+  normal ActivityPub (ruling R6).
   Activities from anyone else keep being dropped after processing.
 - Article parsing is defensive: missing/blank fields become empty, the
   name is truncated to 200 runes, description to 5000, tags normalized
   through `domain.NormalizeTags` (cap 20), image kept only if absolute
   http(s), availability attachment (`available` / `on loan [until <t>]`)
-  mapped to `Busy`/`BusyUntil`, category attachment name to
+  mapped to `Busy`/`BusyUntil`, a malformed or missing `until <t>` fails
+  closed — busy with open-ended expiry; category attachment name to
   `CategoryName`. An article without a valid id or name is dropped
   silently. The article id must share the scheme+host origin of the
   announcing peer's actor id (owner-confirmed: peers are biblio-oggetto

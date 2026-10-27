@@ -255,7 +255,7 @@ func (f *Federation) Peers(ctx context.Context) ([]domain.Peer, error)
 - `TestIngestCreateStoresRemoteObject`: accepted peer; event payload = a biblio-oggetto `Create` activity with embedded Article (name, content, image https URL, attachment Availability `on loan until 2026-12-01T00:00:00Z`, Category `Books`, three `Tag` attachments `#dune`,`#movie`) → `Put` called with parsed `RemoteObject{ID: article id, Name, Description, ImageURL, Busy:true, BusyUntil: 2026-12-01, CategoryName:"Books", Tags:["dune","movie"], CreatedAt/UpdatedAt from published/updated}`.
 - `TestIngestUpdateAndDelete`: Update replaces (`Put` again, idempotent — `TestIngestUpsertIdempotent` covered at repo level Task 2; here assert second Put uses same ID); Delete event with `ObjectID = article id` → `remoteObjects.Delete(id)`.
 - `TestIngestIgnoresNonPeer`: Create payload from actor not in peers (or pending only) → no `Put`, event processed without error.
-- `TestIngestArticleDefensiveParsing`: payload variants — `object` as bare string id, missing name, 500-rune name (truncate to 200), non-http image (dropped, `ImageURL==""`), availability garbage → still stores with `Busy:true, BusyUntil:nil` for `on loan`, `false/nil` for unparseable; `ok=false` only when article id missing/non-http(s) or name empty after truncate.
+- `TestIngestArticleDefensiveParsing`: payload variants — `object` as bare string id, missing name, 500-rune name (truncate to 200), non-http image (dropped, `ImageURL==""`), availability garbage → fail closed: any `on loan...` form stores `Busy:true, BusyUntil:nil` when the timestamp is missing/unparseable; `ok=false` only when article id missing/non-http(s) or name empty after truncate.
 - `TestIngestRejectsForeignOriginID`: accepted peer actor `https://peer.example/ap/actors/catalog`, Create article id `https://evil.example/ap/objects/x` (and same-suffix-but-different-origin) → no `Put`, event still processed; article id `https://peer.example/ap/objects/ok` → stored. Origin = scheme+host of `peerActorID` compared case-insensitively.
 - `TestIngestBadArticleDoesNotFailBatch`: enqueue two inbox events, first undecodable junk (unknown peer) then good Create → both marked processed.
 
@@ -268,7 +268,7 @@ case event.Type == "Create", event.Type == "Update":
     if f.isAcceptedPeer(ctx, event.Actor) { err = f.ingestArticle(ctx, event) }
     // else: fall through to drop (err stays nil)
 case event.Type == "Delete":
-    if f.isAcceptedPeer(ctx, event.Actor) { err = f.remoteObjects.Delete(ctx, event.ObjectID) }
+    if accepted peer && sameOrigin(event.ObjectID, event.Actor) { err = deletePeerObject(ctx, event.ObjectID) } // tolerate ErrNotFound (ruling R6), drop foreign-origin ids (R7)
 ```
 
 `processAccept`: `peers.ByFollowActivityID(event.ObjectID)`; found and `peer.ActorID == event.Actor` → `MarkAccepted`; `ErrNotFound` → nil (drop). `ingestArticle`: `decodePeerArticle(event.Payload, event.Actor)`; `ok` → `remoteObjects.Put`; `!ok` → nil (drop, log). `decodePeerArticle` parses `{"actor","type","object":{id,name,content,image,published,updated,url?,attachment:[{type,name,content}]}}`; refuses non-`article actor` mismatch (`object` present but `activity.actor != peerActorID` → drop); enforces the origin rule (article `id` must share scheme+host with `peerActorID`, else drop); enforces limits per spec (truncate name/description, `domain.NormalizeTags` on `#`-stripped Tag names, image only absolute http(s), availability parse: prefix `"on loan until "` → RFC3339 best-effort).
