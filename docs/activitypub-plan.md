@@ -23,14 +23,20 @@ announcements, and (later) request reservations through the inbox.
 - `GET /ap/actors/{handle}` → ActivityStreams `Service` actor with `publicKey`,
   served as `application/activity+json`.
 
-### PR 2 — Outbound publishing
+### PR 2 — Outbound publishing (done)
 
-- SQLite `outbox` table; `usecase.Objects` enqueues `Create`/`Update`/`Delete`
-  activities transactionally (new port in `usecase/ports.go`).
-- `GET /ap/outbox` and `GET /ap/outbox/{id}` (signed by the instance key).
-- `ap_followers` table; `Follow` handled on the inbox read path with `Accept`.
-- Delivery worker: goroutine started in `internal/app`, signed `POST` to
-  follower inboxes, retries with backoff.
+- SQLite `outbox` table; `usecase.Objects` embeds `Create`/`Update`/`Delete`
+  activity entries in the same SQLite transaction as the object write
+  (`ObjectRepository` methods now take a `domain.OutboxEntry`).
+- `GET /ap/outbox` (OrderedCollection, `limit`/`offset`, default 50) and
+  `GET /ap/outbox/{id}`; `GET /ap/objects/{id}` serves the live `Article`.
+- `followers` table; `POST /ap/inbox` resolves the remote actor document,
+  handles `Follow`/`Undo` and queues `Accept` (verification comes in PR 3).
+- Delivery: `httpapi.Deliverer` goroutine started in `internal/app`
+  (`FederationPoll`, default 5 s), POSTs signed by `github.com/go-fed/httpsig`
+  (rsa-sha256 over `(request-target) host date digest`), exponential backoff
+  30 s → 30 min. `GET /ap/outbox` responses themselves are unsigned: peers
+  fetch them publicly; signing applies to outbound requests only.
 
 ### PR 3 — Inbox security
 

@@ -172,6 +172,7 @@ func (f *fakeCategories) Delete(_ context.Context, id string) error {
 type fakeObjects struct {
 	objects         map[string]domain.Object
 	images          map[string][]domain.ObjectImage
+	entries         []domain.OutboxEntry
 	lastFilter      ObjectFilter
 	createErr       error
 	updateErr       error
@@ -186,7 +187,7 @@ func newFakeObjects() *fakeObjects {
 	}
 }
 
-func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
+func (f *fakeObjects) Create(_ context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
@@ -204,6 +205,7 @@ func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
 	if len(images) > 0 {
 		f.images[object.ID] = append([]domain.ObjectImage{}, images...)
 	}
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
@@ -211,7 +213,7 @@ func isBareImageFileName(imagePath string) bool {
 	return imagePath != "" && !strings.HasPrefix(imagePath, "/") && !strings.Contains(imagePath, "://")
 }
 
-func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
+func (f *fakeObjects) Update(_ context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
@@ -221,15 +223,17 @@ func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
 	// Mirrors the sqlite repo: Update never rewrites image rows; only
 	// ReplaceImages does.
 	f.objects[object.ID] = object
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
-func (f *fakeObjects) Delete(_ context.Context, id string) error {
+func (f *fakeObjects) Delete(_ context.Context, id string, entry domain.OutboxEntry) error {
 	if _, ok := f.objects[id]; !ok {
 		return domain.ErrNotFound
 	}
 	delete(f.objects, id)
 	delete(f.images, id)
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
@@ -400,4 +404,112 @@ func (f *fakeInstanceKeys) Get(_ context.Context) (domain.InstanceKey, error) {
 		return domain.InstanceKey{}, domain.ErrNotFound
 	}
 	return f.key, nil
+}
+
+type fakeOutbox struct {
+	entries  []domain.OutboxEntry
+	appended []domain.OutboxEntry
+}
+
+func newFakeOutbox() *fakeOutbox {
+	return &fakeOutbox{}
+}
+
+func (f *fakeOutbox) Append(_ context.Context, entry domain.OutboxEntry) error {
+	f.entries = append(f.entries, entry)
+	f.appended = append(f.appended, entry)
+	return nil
+}
+
+func (f *fakeOutbox) ByID(_ context.Context, id string) (domain.OutboxEntry, error) {
+	for _, entry := range f.entries {
+		if entry.ID == id {
+			return entry, nil
+		}
+	}
+	return domain.OutboxEntry{}, domain.ErrNotFound
+}
+
+func (f *fakeOutbox) List(_ context.Context, limit, offset int) ([]domain.OutboxEntry, int, error) {
+	return f.entries, len(f.entries), nil
+}
+
+func (f *fakeOutbox) Pending(_ context.Context, now time.Time, limit int) ([]domain.OutboxEntry, error) {
+	pending := make([]domain.OutboxEntry, 0)
+	for _, entry := range f.entries {
+		if entry.DeliveredAt == nil && !entry.NextAttemptAt.After(now) {
+			pending = append(pending, entry)
+		}
+	}
+	return pending, nil
+}
+
+func (f *fakeOutbox) MarkDelivered(_ context.Context, id string, at time.Time) error {
+	for i, entry := range f.entries {
+		if entry.ID == id {
+			f.entries[i].DeliveredAt = &at
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeOutbox) MarkAttempt(_ context.Context, id string, attempts int, nextAttemptAt time.Time) error {
+	for i, entry := range f.entries {
+		if entry.ID == id {
+			f.entries[i].Attempts = attempts
+			f.entries[i].NextAttemptAt = nextAttemptAt
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+type fakeFollowers struct {
+	followers map[string]domain.Follower
+}
+
+func newFakeFollowers() *fakeFollowers {
+	return &fakeFollowers{followers: make(map[string]domain.Follower)}
+}
+
+func (f *fakeFollowers) Add(_ context.Context, follower domain.Follower) error {
+	f.followers[follower.ActorID] = follower
+	return nil
+}
+
+func (f *fakeFollowers) Remove(_ context.Context, actorID string) error {
+	if _, ok := f.followers[actorID]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(f.followers, actorID)
+	return nil
+}
+
+func (f *fakeFollowers) List(_ context.Context) ([]domain.Follower, error) {
+	followers := make([]domain.Follower, 0, len(f.followers))
+	for _, follower := range f.followers {
+		followers = append(followers, follower)
+	}
+	return followers, nil
+}
+
+type fakeRemoteActors struct {
+	actors map[string]domain.RemoteActor
+	err    error
+}
+
+func newFakeRemoteActors() *fakeRemoteActors {
+	return &fakeRemoteActors{actors: make(map[string]domain.RemoteActor)}
+}
+
+func (f *fakeRemoteActors) FetchActor(_ context.Context, actorID string) (domain.RemoteActor, error) {
+	if f.err != nil {
+		return domain.RemoteActor{}, f.err
+	}
+	actor, ok := f.actors[actorID]
+	if !ok {
+		return domain.RemoteActor{}, fmt.Errorf("fetch actor %q: not found", actorID)
+	}
+	return actor, nil
 }

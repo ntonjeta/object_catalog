@@ -202,7 +202,7 @@ func TestObjectsExpiredBusyIsAvailable(t *testing.T) {
 		Busy:      true,
 		BusyUntil: &past,
 	}
-	if err := objects.Create(ctx, expired); err != nil {
+	if err := objects.Create(ctx, expired, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("create expired object: %v", err)
 	}
 	got, err := uc.Get(ctx, expired.ID)
@@ -809,4 +809,45 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestObjectsEnqueuesOutboxEntries(t *testing.T) {
+	ctx := context.Background()
+	objects := newFakeObjects()
+	uc := NewObjects(objects, newFakeCategories(), newFakePhotos(), newFakeReservations(), newFakeActivities())
+
+	created, err := uc.Create(ctx, CreateObjectInput{Name: "Dune", Description: "desert"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	until := time.Now().UTC().Add(time.Hour)
+	if _, err := uc.Update(ctx, created.ID, UpdateObjectInput{Description: ptr("dunes")}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, err := uc.SetBusy(ctx, created.ID, SetObjectBusyInput{Busy: true, BusyUntil: &until}); err != nil {
+		t.Fatalf("SetBusy: %v", err)
+	}
+	if err := uc.Delete(ctx, created.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	want := []domain.OutboxKind{domain.OutboxCreate, domain.OutboxUpdate, domain.OutboxUpdate, domain.OutboxDelete}
+	if len(objects.entries) != len(want) {
+		t.Fatalf("entries = %d, want %d", len(objects.entries), len(want))
+	}
+	for i, entry := range objects.entries {
+		if entry.Kind != want[i] {
+			t.Fatalf("entry %d kind = %q, want %q", i, entry.Kind, want[i])
+		}
+		if entry.ID == "" || entry.Published.IsZero() {
+			t.Fatalf("entry %d = %+v, want id and published", i, entry)
+		}
+		if entry.Kind == domain.OutboxDelete && entry.Object.Name != "Dune" {
+			t.Fatalf("delete entry object = %+v, want Dune snapshot", entry.Object)
+		}
+	}
+}
+
+func ptr[T any](value T) *T {
+	return &value
 }

@@ -72,4 +72,22 @@ var schema = []string{
 		private_pem TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS outbox (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		object_json TEXT NOT NULL DEFAULT '',
+		target TEXT NOT NULL DEFAULT '',
+		follow_id TEXT NOT NULL DEFAULT '',
+		published_at TEXT NOT NULL,
+		delivered_at TEXT,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS outbox_published_at_idx ON outbox(published_at)`,
+	`CREATE INDEX IF NOT EXISTS outbox_pending_idx ON outbox(delivered_at, next_attempt_at)`,
+	`CREATE TABLE IF NOT EXISTS followers (
+		actor_id TEXT PRIMARY KEY,
+		inbox_url TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
 }

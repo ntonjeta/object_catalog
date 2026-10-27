@@ -18,16 +18,18 @@ import (
 )
 
 const (
-	defaultSessionTTL = 24 * time.Hour
-	defaultUploadDir  = "./static"
+	defaultSessionTTL     = 24 * time.Hour
+	defaultUploadDir      = "./static"
+	defaultFederationPoll = 5 * time.Second
 )
 
 type Config struct {
-	DBPath       string
-	SessionTTL   time.Duration
-	CookieSecure bool
-	UploadDir    string
-	BaseURL      string
+	DBPath         string
+	SessionTTL     time.Duration
+	CookieSecure   bool
+	UploadDir      string
+	BaseURL        string
+	FederationPoll time.Duration
 }
 
 func validateBaseURL(raw string) (string, error) {
@@ -57,6 +59,9 @@ type App struct {
 	Objects    *usecase.Objects
 	Categories *usecase.Categories
 	Identity   *usecase.Identity
+	Federation *usecase.Federation
+
+	stopWorker func()
 }
 
 func New(ctx context.Context, cfg Config) (*App, error) {
@@ -68,6 +73,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	if cfg.UploadDir == "" {
 		cfg.UploadDir = defaultUploadDir
+	}
+	if cfg.FederationPoll <= 0 {
+		cfg.FederationPoll = defaultFederationPoll
 	}
 	baseURL, err := validateBaseURL(cfg.BaseURL)
 	if err != nil {
@@ -91,16 +99,23 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	reservationRepo := sqlite.NewReservationRepo(db)
 	activityRepo := sqlite.NewActivityRepo(db)
 	instanceKeyRepo := sqlite.NewInstanceKeyRepo(db)
+	outboxRepo := sqlite.NewOutboxRepo(db)
+	followerRepo := sqlite.NewFollowerRepo(db)
 
 	auth := usecase.NewAuth(users, sessions, cfg.SessionTTL)
 	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
 	identity := usecase.NewIdentity(instanceKeyRepo, baseURL)
-	handler := httpapi.New(auth, objects, categories, identity, httpapi.Config{
+	federation := usecase.NewFederation(outboxRepo, followerRepo, httpapi.NewRemoteActors(), identity)
+	handler := httpapi.New(auth, objects, categories, identity, federation, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,
 		UploadDir:    photos.Dir(),
 		BaseURL:      baseURL,
 	}).Handler()
+
+	deliverer := httpapi.NewDeliverer(federation, identity, cfg.FederationPoll)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	go deliverer.Run(workerCtx)
 
 	return &App{
 		DB:         db,
@@ -109,10 +124,15 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Objects:    objects,
 		Categories: categories,
 		Identity:   identity,
+		Federation: federation,
+		stopWorker: stopWorker,
 	}, nil
 }
 
 func (a *App) Close() error {
+	if a.stopWorker != nil {
+		a.stopWorker()
+	}
 	return a.DB.Close()
 }
 

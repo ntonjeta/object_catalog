@@ -187,8 +187,23 @@ The instance federates as a single ActivityStreams `Service` actor (handle
 - `GET /ap/actors/{handle}` serves the actor document as
   `application/activity+json` with a `publicKey` (PKIX PEM). Unknown handles
   return `not_found`.
-- The actor advertises `/ap/inbox` and `/ap/outbox`; those endpoints are
-  implemented in later federation phases and currently return `not_found`.
+- `POST /ap/inbox` accepts `Follow`/`Undo` targeting the instance actor
+  (resolving the remote actor document for its inbox), queues an `Accept`,
+  and acknowledges all other activity types with `202` without processing.
+  Responses are empty bodies; invalid JSON or actors return `invalid_input`.
+  Requests are not yet signature-verified (PR 3).
+- `GET /ap/outbox` serves an `OrderedCollection` of published activities
+  (newest first, default 50, max 100 via `limit`/`offset` query parameters);
+  `GET /ap/outbox/{id}` serves a single activity.
+- `GET /ap/objects/{id}` serves a catalog object as an ActivityStreams
+  `Article` (`content` description, absolute `image`, availability/category
+  notes and tag attachments), `not_found` for unknown ids.
+- Object create/update/delete/busy writes embed a `Create`/`Update`/`Delete`
+  outbox entry in the same SQLite transaction (snapshot-based).
+- A background deliverer polls undelivered outbox entries every 5 seconds
+  (`app.Config.FederationPoll` in tests), POSTs them HTTP-signatured
+  (rsa-sha256, `(request-target) host date digest`, key `#main-key`) to every
+  follower inbox with exponential backoff (30 s base, 30 min cap).
 - Federation endpoints are public reads; no session is required.
 
 ## Code structure
@@ -269,6 +284,10 @@ Constraints:
 | `DELETE` | `/api/objects/{id}` | admin |
 | `GET` | `/.well-known/webfinger` | public |
 | `GET` | `/ap/actors/{handle}` | public |
+| `POST` | `/ap/inbox` | public (unsigned until PR 3) |
+| `GET` | `/ap/outbox` | public |
+| `GET` | `/ap/outbox/{id}` | public |
+| `GET` | `/ap/objects/{id}` | public |
 
 Object create/update accept both JSON and `multipart/form-data`. Multipart
 fields are `name`, `description`, `category_id`, `tags` (comma-separated), and

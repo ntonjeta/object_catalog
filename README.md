@@ -82,6 +82,12 @@ real deployments.
 | `PATCH` | `/api/objects/{id}/busy` | admin |
 | `PATCH` | `/api/objects/{id}/reservation` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
+| `GET` | `/.well-known/webfinger` | public |
+| `GET` | `/ap/actors/{handle}` | public |
+| `POST` | `/ap/inbox` | public |
+| `GET` | `/ap/outbox` | public |
+| `GET` | `/ap/outbox/{id}` | public |
+| `GET` | `/ap/objects/{id}` | public |
 
 `GET /api/objects` accepts `q`, `category`, `tag`, `limit` (max 100), and
 `offset`. Errors use `{"error":{"code":"...","message":"..."}}` with codes

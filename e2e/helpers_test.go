@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -16,10 +17,8 @@ import (
 )
 
 const (
-	adminEmail         = "admin@example.com"
-	adminPassword      = "password123"
-	federationBaseURL  = "https://catalog.example.com"
-	federationAcctHost = "catalog.example.com"
+	adminEmail    = "admin@example.com"
+	adminPassword = "password123"
 )
 
 type env struct {
@@ -31,6 +30,8 @@ type env struct {
 	adminEmail    string
 	adminPassword string
 	uploadRoot    string
+	baseURL       string
+	acctHost      string
 }
 
 type categoryDTO struct {
@@ -99,12 +100,19 @@ type errorEnvelope struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	baseURL := "http://" + listener.Addr().String()
 	uploadRoot := filepath.Join(t.TempDir(), "static")
+
 	application, err := app.New(context.Background(), app.Config{
-		DBPath:     filepath.Join(t.TempDir(), "catalog.db"),
-		SessionTTL: time.Hour,
-		UploadDir:  uploadRoot,
-		BaseURL:    federationBaseURL,
+		DBPath:         filepath.Join(t.TempDir(), "catalog.db"),
+		SessionTTL:     time.Hour,
+		UploadDir:      uploadRoot,
+		BaseURL:        baseURL,
+		FederationPoll: 200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -118,7 +126,9 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("create admin: %v", err)
 	}
 
-	server := httptest.NewServer(application.Handler)
+	server := httptest.NewUnstartedServer(application.Handler)
+	server.Listener = listener
+	server.Start()
 	t.Cleanup(server.Close)
 
 	jar, err := cookiejar.New(nil)
@@ -134,6 +144,8 @@ func newEnv(t *testing.T) *env {
 		adminEmail:    adminEmail,
 		adminPassword: adminPassword,
 		uploadRoot:    uploadRoot,
+		baseURL:       baseURL,
+		acctHost:      listener.Addr().String(),
 	}
 }
 

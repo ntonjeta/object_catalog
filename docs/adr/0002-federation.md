@@ -35,9 +35,9 @@ Go: no CGO, no build step, SQLite via `modernc.org/sqlite`.
    `usecase/ports.go`; the `Identity` use case owns generation/derivation.
    AP JSON-LD serialization is transport detail and lives in
    `internal/adapter/http`.
-7. **Deferred.** Inbox signature verification, outbox delivery, followers,
-   and remote reservations. The actor advertises `/ap/inbox` and `/ap/outbox`
-   now; those endpoints return 404 until their phases land.
+7. **Deferred.** Inbox signature verification and remote reservations.
+   Outbox delivery, followers, and `Follow`/`Undo` handling landed with PR 2;
+   the inbox accepts unsigned requests until PR 3 adds verification.
 
 ## Consequences
 

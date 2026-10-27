@@ -58,9 +58,9 @@ type ObjectFilter struct {
 }
 
 type ObjectRepository interface {
-	Create(ctx context.Context, object domain.Object) error
-	Update(ctx context.Context, object domain.Object) error
-	Delete(ctx context.Context, id string) error
+	Create(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error
+	Update(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error
+	Delete(ctx context.Context, id string, entry domain.OutboxEntry) error
 	ByID(ctx context.Context, id string) (domain.Object, error)
 	ByName(ctx context.Context, name string) (domain.Object, error)
 	List(ctx context.Context, filter ObjectFilter) ([]domain.Object, int, error)
@@ -71,4 +71,27 @@ type ObjectRepository interface {
 type InstanceKeyRepository interface {
 	Create(ctx context.Context, key domain.InstanceKey) error
 	Get(ctx context.Context) (domain.InstanceKey, error)
+}
+
+// OutboxRepository stores federated activities. Append is used standalone by
+// the Federation use case; the object mutations embed the entry in the same
+// SQLite transaction through ObjectRepository.
+type OutboxRepository interface {
+	Append(ctx context.Context, entry domain.OutboxEntry) error
+	ByID(ctx context.Context, id string) (domain.OutboxEntry, error)
+	List(ctx context.Context, limit, offset int) ([]domain.OutboxEntry, int, error)
+	Pending(ctx context.Context, now time.Time, limit int) ([]domain.OutboxEntry, error)
+	MarkDelivered(ctx context.Context, id string, at time.Time) error
+	MarkAttempt(ctx context.Context, id string, attempts int, nextAttemptAt time.Time) error
+}
+
+type FollowerRepository interface {
+	Add(ctx context.Context, follower domain.Follower) error
+	Remove(ctx context.Context, actorID string) error
+	List(ctx context.Context) ([]domain.Follower, error)
+}
+
+// RemoteActorRepository resolves a remote actor id to its document (inbox).
+type RemoteActorRepository interface {
+	FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error)
 }

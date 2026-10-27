@@ -41,6 +41,24 @@ func NewIdentity(keys InstanceKeyRepository, baseURL string) *Identity {
 	return &Identity{keys: keys, baseURL: strings.TrimRight(baseURL, "/")}
 }
 
+// BaseURL is the validated canonical origin the actor identifiers derive from.
+func (i *Identity) BaseURL() string { return i.baseURL }
+
+// SigningKey loads (or creates) the instance key and returns the private key
+// with its public-key identifier.
+func (i *Identity) SigningKey(ctx context.Context) (*rsa.PrivateKey, string, error) {
+	key, err := i.loadOrCreateKey(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	privateKey, err := parsePrivatePEM(key.PrivatePEM)
+	if err != nil {
+		return nil, "", err
+	}
+	keyID := i.baseURL + instanceActorRoute + domain.InstanceActorHandle + "#main-key"
+	return privateKey, keyID, nil
+}
+
 // Actor loads or creates the instance signing key and returns the actor
 // document data.
 func (i *Identity) Actor(ctx context.Context) (InstanceActor, error) {

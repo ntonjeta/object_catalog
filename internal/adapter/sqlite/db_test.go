@@ -210,7 +210,7 @@ func TestObjectRepoByName(t *testing.T) {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := repo.Create(ctx, object); err != nil {
+	if err := repo.Create(ctx, object, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	found, err := repo.ByName(ctx, "dune")
@@ -226,10 +226,87 @@ func TestObjectRepoByName(t *testing.T) {
 
 	second := object
 	second.ID = "two"
-	if err := repo.Create(ctx, second); err != nil {
+	if err := repo.Create(ctx, second, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("create duplicate: %v", err)
 	}
 	if _, err := repo.ByName(ctx, "Dune"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate error = %v, want ErrConflict", err)
+	}
+}
+
+func TestObjectRepoCreateEmbedsOutboxEntry(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := NewObjectRepo(db)
+	outbox := NewOutboxRepo(db)
+
+	now := time.Now().UTC()
+	entry := domain.OutboxEntry{
+		ID:        "entry-1",
+		Kind:      domain.OutboxCreate,
+		Object:    domain.Object{ID: "one", Name: "Dune", Tags: []string{"scifi"}},
+		Published: now,
+	}
+	if err := repo.Create(ctx, entry.Object, entry); err != nil {
+		t.Fatalf("create with entry: %v", err)
+	}
+	stored, err := outbox.ByID(ctx, "entry-1")
+	if err != nil {
+		t.Fatalf("outbox ByID: %v", err)
+	}
+	if stored.Kind != domain.OutboxCreate || stored.Object.Name != "Dune" || len(stored.Object.Tags) != 1 {
+		t.Fatalf("stored = %+v", stored)
+	}
+
+	pending, err := outbox.Pending(ctx, now, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = (%v, %v), want one", pending, err)
+	}
+	if err := outbox.MarkAttempt(ctx, "entry-1", 1, now.Add(time.Hour)); err != nil {
+		t.Fatalf("MarkAttempt: %v", err)
+	}
+	pending, err = outbox.Pending(ctx, now, 10)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending after backoff = (%v, %v), want none", pending, err)
+	}
+	if err := outbox.MarkDelivered(ctx, "entry-1", now); err != nil {
+		t.Fatalf("MarkDelivered: %v", err)
+	}
+	if err := outbox.MarkDelivered(ctx, "missing", now); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing mark error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFollowerRepoUpsertAndRemove(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := NewFollowerRepo(db)
+
+	if err := repo.Add(ctx, domain.Follower{ActorID: "alice", InboxURL: "https://remote.example/inbox/old", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := repo.Add(ctx, domain.Follower{ActorID: "alice", InboxURL: "https://remote.example/inbox/new", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	followers, err := repo.List(ctx)
+	if err != nil || len(followers) != 1 {
+		t.Fatalf("list = (%v, %v), want one follower", followers, err)
+	}
+	if followers[0].InboxURL != "https://remote.example/inbox/new" {
+		t.Fatalf("inbox = %q, want refreshed", followers[0].InboxURL)
+	}
+	if err := repo.Remove(ctx, "alice"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := repo.Remove(ctx, "alice"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("second remove error = %v, want ErrNotFound", err)
 	}
 }

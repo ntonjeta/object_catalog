@@ -19,7 +19,7 @@ func NewObjectRepo(db *sql.DB) *ObjectRepo {
 	return &ObjectRepo{db: db}
 }
 
-func (r *ObjectRepo) Create(ctx context.Context, object domain.Object) error {
+func (r *ObjectRepo) Create(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin object creation: %w", err)
@@ -51,13 +51,16 @@ func (r *ObjectRepo) Create(ctx context.Context, object domain.Object) error {
 	if err := replaceImages(ctx, tx, object.ID, images); err != nil {
 		return err
 	}
+	if err := appendOutboxTx(ctx, tx, entry); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit object creation: %w", err)
 	}
 	return nil
 }
 
-func (r *ObjectRepo) Update(ctx context.Context, object domain.Object) error {
+func (r *ObjectRepo) Update(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin object update: %w", err)
@@ -83,14 +86,23 @@ func (r *ObjectRepo) Update(ctx context.Context, object domain.Object) error {
 	if err := replaceTags(ctx, tx, object.ID, object.Tags); err != nil {
 		return err
 	}
+	if err := appendOutboxTx(ctx, tx, entry); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit object update: %w", err)
 	}
 	return nil
 }
 
-func (r *ObjectRepo) Delete(ctx context.Context, id string) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM objects WHERE id = ?`, id)
+func (r *ObjectRepo) Delete(ctx context.Context, id string, entry domain.OutboxEntry) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin object deletion: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM objects WHERE id = ?`, id)
 	if err != nil {
 		return mapError(err)
 	}
@@ -100,6 +112,12 @@ func (r *ObjectRepo) Delete(ctx context.Context, id string) error {
 	}
 	if affected == 0 {
 		return domain.ErrNotFound
+	}
+	if err := appendOutboxTx(ctx, tx, entry); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit object deletion: %w", err)
 	}
 	return nil
 }

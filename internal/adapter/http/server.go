@@ -20,13 +20,14 @@ type Server struct {
 	objects        *usecase.Objects
 	categories     *usecase.Categories
 	identity       *usecase.Identity
+	federation     *usecase.Federation
 	cookieSecure   bool
 	uploadDir      string
 	baseURL        string
 	federationHost string
 }
 
-func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, cfg Config) *Server {
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, identity *usecase.Identity, federation *usecase.Federation, cfg Config) *Server {
 	federationHost := ""
 	if parsed, err := url.Parse(cfg.BaseURL); err == nil {
 		federationHost = strings.ToLower(parsed.Host)
@@ -36,6 +37,7 @@ func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categ
 		objects:        objects,
 		categories:     categories,
 		identity:       identity,
+		federation:     federation,
 		cookieSecure:   cfg.CookieSecure,
 		uploadDir:      cfg.UploadDir,
 		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),
@@ -72,6 +74,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /.well-known/webfinger", s.webfinger)
 	mux.HandleFunc("GET /ap/actors/{handle}", s.actor)
+	mux.HandleFunc("POST /ap/inbox", s.inbox)
+	mux.HandleFunc("GET /ap/outbox", s.outbox)
+	mux.HandleFunc("GET /ap/outbox/{id}", s.outboxEntry)
+	mux.HandleFunc("GET /ap/objects/{id}", s.catalogObject)
 
 	s.registerStatic(mux)
 	mux.HandleFunc("/", s.notFound)
