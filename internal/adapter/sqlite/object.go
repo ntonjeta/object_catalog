@@ -185,16 +185,16 @@ func (r *ObjectRepo) ByName(ctx context.Context, name string) (domain.Object, er
 }
 
 func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]domain.Object, int, error) {
-	where, args := objectWhere(filter)
+	where, args := combinedWhere(filter)
 
 	var total int
-	if err := r.db.QueryRowContext(ctx, objectCount+where, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, combinedCount+where, args...).Scan(&total); err != nil {
 		return nil, 0, mapError(err)
 	}
 
 	queryArgs := append(append([]any{}, args...), filter.Limit, filter.Offset)
 	rows, err := r.db.QueryContext(ctx,
-		objectSelect+where+` ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
+		combinedSelect+where+` ORDER BY combined.created_at DESC, combined.id DESC LIMIT ? OFFSET ?`,
 		queryArgs...,
 	)
 	if err != nil {
@@ -204,7 +204,7 @@ func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]d
 
 	objects := make([]domain.Object, 0)
 	for rows.Next() {
-		object, err := scanObject(rows)
+		object, err := scanCombined(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -218,7 +218,7 @@ func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]d
 	// enough that this keeps the query simple. A batched loader can replace it
 	// if needed.
 	for i := range objects {
-		tags, err := r.tags(ctx, objects[i].ID)
+		tags, err := r.tagsFor(ctx, objects[i])
 		if err != nil {
 			return nil, 0, err
 		}
@@ -232,9 +232,23 @@ func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]d
 	return objects, total, nil
 }
 
+// tagsFor reads the tags of a catalog row. Mirrored rows live in their own
+// tag table, keyed by the peer article id.
+func (r *ObjectRepo) tagsFor(ctx context.Context, object domain.Object) ([]string, error) {
+	table := objectTagsTable
+	if object.Source != "" {
+		table = remoteObjectTagsTable
+	}
+	return r.tagsFrom(ctx, table, object.ID)
+}
+
 func (r *ObjectRepo) tags(ctx context.Context, objectID string) ([]string, error) {
+	return r.tagsFrom(ctx, objectTagsTable, objectID)
+}
+
+func (r *ObjectRepo) tagsFrom(ctx context.Context, table, objectID string) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT tag FROM object_tags WHERE object_id = ? ORDER BY tag`, objectID,
+		`SELECT tag FROM `+table+` WHERE object_id = ? ORDER BY tag`, objectID,
 	)
 	if err != nil {
 		return nil, mapError(err)
@@ -324,39 +338,115 @@ const objectSelect = `SELECT
 	FROM objects o
 	LEFT JOIN categories c ON c.id = o.category_id`
 
-const objectCount = `SELECT COUNT(*)
-	FROM objects o
-	LEFT JOIN categories c ON c.id = o.category_id`
+// combinedSelect merges the local catalog with the objects mirrored from
+// joined peers. The source column carries the peer actor id for mirrored rows
+// and stays empty for local ones.
+const combinedSelect = `SELECT
+	combined.id, combined.name, combined.description, combined.image_path,
+	combined.busy, combined.busy_until, combined.category_id, combined.category_name,
+	combined.source, combined.created_at, combined.updated_at
+	FROM (
+		SELECT o.id, o.name, o.description, o.image_path, o.busy, o.busy_until,
+			o.category_id, c.name AS category_name, '' AS source, o.created_at, o.updated_at
+		FROM objects o LEFT JOIN categories c ON c.id = o.category_id
+		UNION ALL
+		SELECT r.id, r.name, r.description, r.image_url, r.busy, r.busy_until,
+			NULL, NULLIF(r.category_name, ''), r.peer_actor_id, r.published_at, r.updated_at
+		FROM remote_objects r
+	) combined`
 
-func objectWhere(filter usecase.ObjectFilter) (string, []any) {
+const combinedCount = `SELECT COUNT(*)
+	FROM (
+		SELECT o.id, o.name, o.description, o.image_path, o.busy, o.busy_until,
+			o.category_id, c.name AS category_name, '' AS source, o.created_at, o.updated_at
+		FROM objects o LEFT JOIN categories c ON c.id = o.category_id
+		UNION ALL
+		SELECT r.id, r.name, r.description, r.image_url, r.busy, r.busy_until,
+			NULL, NULLIF(r.category_name, ''), r.peer_actor_id, r.published_at, r.updated_at
+		FROM remote_objects r
+	) combined`
+
+func combinedWhere(filter usecase.ObjectFilter) (string, []any) {
 	clauses := make([]string, 0, 3)
-	args := make([]any, 0, 7)
+	args := make([]any, 0, 9)
 	if filter.Query != "" {
 		pattern := likePattern(filter.Query)
-		clauses = append(clauses, `(o.name LIKE ? ESCAPE '\'
-			OR o.description LIKE ? ESCAPE '\'
-			OR c.name LIKE ? ESCAPE '\'
+		clauses = append(clauses, `(combined.name LIKE ? ESCAPE '\'
+			OR combined.description LIKE ? ESCAPE '\'
+			OR combined.category_name LIKE ? ESCAPE '\'
 			OR EXISTS (
 				SELECT 1 FROM object_tags ot
-				WHERE ot.object_id = o.id AND ot.tag LIKE ? ESCAPE '\'
+				WHERE ot.object_id = combined.id AND ot.tag LIKE ? ESCAPE '\'
+			)
+			OR EXISTS (
+				SELECT 1 FROM remote_object_tags rot
+				WHERE rot.object_id = combined.id AND rot.tag LIKE ? ESCAPE '\'
 			))`)
-		args = append(args, pattern, pattern, pattern, pattern)
+		args = append(args, pattern, pattern, pattern, pattern, pattern)
 	}
 	if filter.Category != "" {
-		clauses = append(clauses, `c.name = ? COLLATE NOCASE`)
+		// The category filter applies to the local catalog only; mirrored
+		// objects carry a free-form category name from the peer.
+		clauses = append(clauses, `combined.source = '' AND combined.category_name = ? COLLATE NOCASE`)
 		args = append(args, filter.Category)
 	}
 	if filter.Tag != "" {
-		clauses = append(clauses, `EXISTS (
-			SELECT 1 FROM object_tags ot
-			WHERE ot.object_id = o.id AND ot.tag = ?
-		)`)
-		args = append(args, filter.Tag)
+		clauses = append(clauses, `(EXISTS (
+				SELECT 1 FROM object_tags ot
+				WHERE ot.object_id = combined.id AND ot.tag = ?
+			)
+			OR EXISTS (
+				SELECT 1 FROM remote_object_tags rot
+				WHERE rot.object_id = combined.id AND rot.tag = ?
+			))`)
+		args = append(args, filter.Tag, filter.Tag)
 	}
 	if len(clauses) == 0 {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// scanCombined reads one row of the merged catalog. Local rows keep the
+// category id; mirrored rows only carry the peer's category name.
+func scanCombined(row scanner) (domain.Object, error) {
+	var (
+		object               domain.Object
+		busy                 int
+		busyUntil            sql.NullString
+		createdAt, updatedAt string
+		categoryID           sql.NullString
+		categoryName         sql.NullString
+	)
+	if err := row.Scan(
+		&object.ID, &object.Name, &object.Description, &object.ImagePath, &busy, &busyUntil,
+		&categoryID, &categoryName, &object.Source, &createdAt, &updatedAt,
+	); err != nil {
+		return domain.Object{}, mapError(err)
+	}
+	object.Busy = busy != 0
+	var err error
+	if busyUntil.Valid {
+		until, err := parseTime(busyUntil.String)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		object.BusyUntil = &until
+	}
+	if object.CreatedAt, err = parseTime(createdAt); err != nil {
+		return domain.Object{}, err
+	}
+	if object.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		return domain.Object{}, err
+	}
+	switch {
+	case categoryID.Valid:
+		object.Category = &domain.Category{ID: categoryID.String, Name: categoryName.String}
+	case categoryName.Valid:
+		object.Category = &domain.Category{Name: categoryName.String}
+	}
+	object.Tags = []string{}
+	return object, nil
 }
 
 func scanObject(row scanner) (domain.Object, error) {

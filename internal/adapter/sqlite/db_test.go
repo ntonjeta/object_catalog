@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"biblio-oggetto/internal/domain"
+	"biblio-oggetto/internal/usecase"
 )
 
 func TestOpenMigratesExistingObjectsWithoutImagePath(t *testing.T) {
@@ -598,6 +599,152 @@ func TestRemoteObjectRepoPutUpserts(t *testing.T) {
 	}
 	if len(tags) != 1 || tags[0] != "scifi" {
 		t.Fatalf("tags = %v, want replaced by second put", tags)
+	}
+}
+
+func TestObjectListMergeFiltersAndOrder(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	objects := NewObjectRepo(db)
+	categories := NewCategoryRepo(db)
+	remotes := NewRemoteObjectRepo(db)
+
+	now := time.Now().UTC()
+	if err := categories.Create(ctx, domain.Category{
+		ID: "cat-1", Name: "Books", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create category: %v", err)
+	}
+	local := domain.Object{
+		ID:          "local-1",
+		Name:        "Local Book",
+		Description: "printed copy",
+		Category:    &domain.Category{ID: "cat-1", Name: "Books"},
+		Tags:        []string{"dune"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := objects.Create(ctx, local, domain.OutboxEntry{}); err != nil {
+		t.Fatalf("create local object: %v", err)
+	}
+
+	first := domain.RemoteObject{
+		ID:           "https://peer.example/ap/objects/1",
+		PeerActorID:  "https://peer.example/ap/actor",
+		Name:         "Remote Book",
+		Description:  "mirrored copy",
+		ImageURL:     "https://peer.example/img/1.png",
+		CategoryName: "Novels",
+		Tags:         []string{"dune"},
+		CreatedAt:    now.Add(time.Hour),
+		UpdatedAt:    now.Add(time.Hour),
+	}
+	second := domain.RemoteObject{
+		ID:          "https://other.example/ap/objects/1",
+		PeerActorID: "https://other.example/ap/actor",
+		Name:        "Other Book",
+		Tags:        []string{"scifi"},
+		CreatedAt:   now.Add(2 * time.Hour),
+		UpdatedAt:   now.Add(2 * time.Hour),
+	}
+	for _, object := range []domain.RemoteObject{first, second} {
+		if err := remotes.Put(ctx, object); err != nil {
+			t.Fatalf("put remote %s: %v", object.ID, err)
+		}
+	}
+
+	listed, total, err := objects.List(ctx, usecase.ObjectFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 3 || len(listed) != 3 {
+		t.Fatalf("total = %d, rows = %d, want 3 and 3", total, len(listed))
+	}
+	wantOrder := []string{second.ID, first.ID, local.ID}
+	for i, want := range wantOrder {
+		if listed[i].ID != want {
+			t.Fatalf("row %d = %q, want %q (created_at desc)", i, listed[i].ID, want)
+		}
+	}
+	if listed[1].Source != first.PeerActorID {
+		t.Fatalf("remote source = %q, want %q", listed[1].Source, first.PeerActorID)
+	}
+	if listed[2].Source != "" {
+		t.Fatalf("local source = %q, want empty", listed[2].Source)
+	}
+	if listed[1].Category == nil || listed[1].Category.Name != "Novels" {
+		t.Fatalf("remote category = %+v, want name Novels", listed[1].Category)
+	}
+	if listed[1].Category.ID != "" {
+		t.Fatalf("remote category id = %q, want empty", listed[1].Category.ID)
+	}
+	if listed[2].Category == nil || listed[2].Category.ID != "cat-1" {
+		t.Fatalf("local category = %+v, want id cat-1", listed[2].Category)
+	}
+
+	matched, matchedTotal, err := objects.List(ctx, usecase.ObjectFilter{Query: "dune", Limit: 20})
+	if err != nil {
+		t.Fatalf("List q=dune: %v", err)
+	}
+	if matchedTotal != 2 || len(matched) != 2 {
+		t.Fatalf("q=dune total = %d, rows = %d, want 2", matchedTotal, len(matched))
+	}
+	sources := map[string]bool{}
+	for _, object := range matched {
+		sources[object.Source] = true
+	}
+	if !sources[""] || !sources[first.PeerActorID] {
+		t.Fatalf("q=dune sources = %v, want local and peer row", sources)
+	}
+
+	byCategory, categoryTotal, err := objects.List(ctx, usecase.ObjectFilter{Category: "Books", Limit: 20})
+	if err != nil {
+		t.Fatalf("List category=Books: %v", err)
+	}
+	if categoryTotal != 1 || len(byCategory) != 1 {
+		t.Fatalf("category=Books total = %d, rows = %d, want 1", categoryTotal, len(byCategory))
+	}
+	if byCategory[0].ID != local.ID {
+		t.Fatalf("category=Books row = %q, want local object", byCategory[0].ID)
+	}
+
+	byTag, tagTotal, err := objects.List(ctx, usecase.ObjectFilter{Tag: "scifi", Limit: 20})
+	if err != nil {
+		t.Fatalf("List tag=scifi: %v", err)
+	}
+	if tagTotal != 1 || len(byTag) != 1 || byTag[0].ID != second.ID {
+		t.Fatalf("tag=scifi = (%d, %+v), want only the other peer row", tagTotal, byTag)
+	}
+}
+
+func TestObjectListRemoteTags(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	objects := NewObjectRepo(db)
+	remotes := NewRemoteObjectRepo(db)
+
+	now := time.Now().UTC()
+	remote := domain.RemoteObject{
+		ID:          "https://peer.example/ap/objects/1",
+		PeerActorID: "https://peer.example/ap/actor",
+		Name:        "Remote Book",
+		Tags:        []string{"scifi", "classic"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := remotes.Put(ctx, remote); err != nil {
+		t.Fatalf("put remote: %v", err)
+	}
+
+	listed, _, err := objects.List(ctx, usecase.ObjectFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("rows = %d, want 1", len(listed))
+	}
+	if len(listed[0].Tags) != 2 || listed[0].Tags[0] != "classic" || listed[0].Tags[1] != "scifi" {
+		t.Fatalf("tags = %v, want [classic scifi] from remote_object_tags", listed[0].Tags)
 	}
 }
 
