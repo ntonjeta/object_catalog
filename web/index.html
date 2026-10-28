@@ -94,6 +94,35 @@
     </section>
   </main>
 
+  <dialog id="detail-dialog" class="dialog dialog-detail" aria-labelledby="detail-title">
+    <div class="detail-body">
+      <div id="detail-loading" class="detail-loading" hidden>Loading object...</div>
+      <div id="detail-content" class="detail-content" hidden>
+        <div class="detail-head">
+          <h2 id="detail-title"></h2>
+          <div id="detail-badges" class="detail-badges"></div>
+        </div>
+        <figure class="detail-gallery">
+          <div id="detail-stage" class="detail-stage" hidden>
+            <button id="detail-prev" class="button button-ghost detail-arrow detail-arrow-prev" type="button" aria-label="Previous image">‹</button>
+            <img id="detail-main-image" class="detail-main-image" alt="">
+            <button id="detail-next" class="button button-ghost detail-arrow detail-arrow-next" type="button" aria-label="Next image">›</button>
+          </div>
+          <div id="detail-thumbs" class="detail-thumbs" role="group" aria-label="Object images"></div>
+          <figcaption id="detail-caption" class="detail-caption"></figcaption>
+        </figure>
+        <h3>Description</h3>
+        <p id="detail-description" class="detail-description"></p>
+        <ul id="detail-tags" class="tag-list"></ul>
+        <p id="detail-dates" class="detail-dates muted"></p>
+        <div class="dialog-actions">
+          <button id="detail-edit" class="button" type="button" data-admin-only hidden>Edit object</button>
+          <button class="button button-ghost" type="button" data-close-dialog="detail-dialog">Close</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="login-dialog" class="dialog" aria-labelledby="login-title">
     <form id="login-form" class="dialog-form">
       <div>

@@ -74,6 +74,21 @@ busyDialog: document.getElementById("busy-dialog"),
     categoryName: document.getElementById("category-name"),
     categoryError: document.getElementById("category-error"),
     categorySave: document.getElementById("category-save"),
+    detailDialog: document.getElementById("detail-dialog"),
+    detailLoading: document.getElementById("detail-loading"),
+    detailContent: document.getElementById("detail-content"),
+    detailTitle: document.getElementById("detail-title"),
+    detailBadges: document.getElementById("detail-badges"),
+    detailStage: document.getElementById("detail-stage"),
+    detailMainImage: document.getElementById("detail-main-image"),
+    detailPrev: document.getElementById("detail-prev"),
+    detailNext: document.getElementById("detail-next"),
+    detailThumbs: document.getElementById("detail-thumbs"),
+    detailCaption: document.getElementById("detail-caption"),
+    detailDescription: document.getElementById("detail-description"),
+    detailTags: document.getElementById("detail-tags"),
+    detailDates: document.getElementById("detail-dates"),
+    detailEdit: document.getElementById("detail-edit"),
   };
 
   const state = {
@@ -90,6 +105,11 @@ busyDialog: document.getElementById("busy-dialog"),
     pendingUploads: [],
     editingBusyId: null,
     editingCategoryId: null,
+    detailObjectId: null,
+    detailName: "",
+    detailImages: [],
+    detailIndex: 0,
+    detailRequestId: 0,
   };
 
   let statusTimer;
@@ -211,6 +231,7 @@ busyDialog: document.getElementById("busy-dialog"),
     closeDialog(elements.reserveDialog);
     closeDialog(elements.categoryDialog);
     closeDialog(elements.importDialog);
+    closeDialog(elements.detailDialog);
   }
 
   function applyAdminVisibility() {
@@ -518,6 +539,10 @@ busyDialog: document.getElementById("busy-dialog"),
     for (const object of state.objects) {
       const reserved = !object.busy && object.reserved_from;
       const card = el("article", reserved ? "object-card object-card-reserved" : "object-card");
+      card.dataset.id = object.id;
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `View details for ${object.name}`);
 
       const top = el("div", "card-top");
       top.append(el("h3", "", object.name));
@@ -965,6 +990,173 @@ busyDialog: document.getElementById("busy-dialog"),
     }
   }
 
+  const detailHash = (id) => `#object/${encodeURIComponent(id)}`;
+
+  function detailImageURLs(object) {
+    const images = (object.images || []).map((image) => image.url).filter(Boolean);
+    if (images.length === 0 && object.image_path) {
+      return [object.image_path];
+    }
+    return images;
+  }
+
+  function renderDetailGallery() {
+    const urls = state.detailImages;
+    const count = urls.length;
+    if (count === 0) {
+      elements.detailStage.hidden = true;
+      elements.detailThumbs.hidden = true;
+      elements.detailThumbs.replaceChildren();
+      elements.detailCaption.textContent = "";
+      return;
+    }
+    const index = Math.min(Math.max(state.detailIndex, 0), count - 1);
+    state.detailIndex = index;
+    elements.detailStage.hidden = false;
+    elements.detailMainImage.src = urls[index];
+    elements.detailMainImage.alt = `${state.detailName || "Object"} — image ${index + 1} of ${count}`;
+    elements.detailPrev.disabled = count < 2;
+    elements.detailNext.disabled = count < 2;
+    elements.detailCaption.textContent = count > 1 ? `Image ${index + 1} of ${count}` : "";
+
+    elements.detailThumbs.hidden = count < 2;
+    elements.detailThumbs.replaceChildren();
+    if (count < 2) {
+      return;
+    }
+    urls.forEach((url, position) => {
+      const thumb = el("button", "detail-thumb");
+      thumb.type = "button";
+      thumb.dataset.index = String(position);
+      const image = el("img", "detail-thumb-image");
+      image.src = url;
+      image.alt = "";
+      image.loading = "lazy";
+      image.decoding = "async";
+      thumb.append(image);
+      if (position === index) {
+        thumb.classList.add("is-active");
+        thumb.setAttribute("aria-current", "true");
+      }
+      thumb.setAttribute("aria-label", `Show image ${position + 1} of ${count}`);
+      elements.detailThumbs.append(thumb);
+    });
+  }
+
+  function showDetailObject(object) {
+    state.detailName = object.name;
+    state.detailImages = detailImageURLs(object);
+    state.detailIndex = 0;
+
+    elements.detailTitle.textContent = object.name;
+    elements.detailBadges.replaceChildren();
+    if (object.category) {
+      elements.detailBadges.append(el("span", "category-badge", object.category.name));
+    }
+    if (object.busy) {
+      const label = object.busy_until
+        ? `Unavailable until ${formatDate(object.busy_until)}`
+        : "Unavailable";
+      elements.detailBadges.append(el("span", "busy-badge", label));
+    } else if (object.reserved_from) {
+      elements.detailBadges.append(
+        el("span", "reserved-badge", `Reserved from ${formatDate(object.reserved_from)}`),
+      );
+    }
+
+    renderDetailGallery();
+
+    elements.detailDescription.textContent = object.description
+      ? object.description
+      : "No description.";
+    elements.detailDescription.classList.toggle("is-empty", !object.description);
+
+    elements.detailTags.replaceChildren();
+    for (const tag of object.tags || []) {
+      elements.detailTags.append(el("li", "tag", tag));
+    }
+    elements.detailTags.hidden = (object.tags || []).length === 0;
+
+    const dates = [`Added ${formatDate(object.created_at)}`];
+    if (object.updated_at && object.updated_at !== object.created_at) {
+      dates.push(`Updated ${formatDate(object.updated_at)}`);
+    }
+    elements.detailDates.textContent = dates.join(" · ");
+
+    elements.detailLoading.hidden = true;
+    elements.detailContent.hidden = false;
+    applyAdminVisibility();
+    openDialog(elements.detailDialog);
+  }
+
+  async function showDetail(id) {
+    const requestId = ++state.detailRequestId;
+    state.detailObjectId = id;
+    state.detailName = "";
+    state.detailImages = [];
+    state.detailIndex = 0;
+    elements.detailContent.hidden = true;
+    elements.detailLoading.hidden = false;
+    openDialog(elements.detailDialog);
+    try {
+      const data = await api(`/api/objects/${encodeURIComponent(id)}`);
+      if (requestId !== state.detailRequestId || state.detailObjectId !== id) {
+        return;
+      }
+      showDetailObject(data.object);
+    } catch (error) {
+      if (requestId !== state.detailRequestId) {
+        return;
+      }
+      state.detailObjectId = null;
+      elements.detailLoading.hidden = true;
+      closeDialog(elements.detailDialog);
+      handleActionError(error);
+    }
+  }
+
+  function currentDetailIdFromHash() {
+    const match = /^#object\/(.+)$/.exec(location.hash);
+    if (!match) {
+      return "";
+    }
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return "";
+    }
+  }
+
+  function handleRoute() {
+    const id = currentDetailIdFromHash();
+    if (id) {
+      if (id !== state.detailObjectId) {
+        showDetail(id);
+      } else if (!elements.detailDialog.open) {
+        showDetail(id);
+      }
+      return;
+    }
+    if (elements.detailDialog.open) {
+      closeDialog(elements.detailDialog);
+    }
+  }
+
+  function openDetail(id) {
+    const target = detailHash(id);
+    if (location.hash === target) {
+      handleRoute();
+      return;
+    }
+    location.hash = target;
+  }
+
+  function clearDetailHash() {
+    if (location.hash.startsWith("#object/")) {
+      history.pushState(null, "", `${location.pathname}${location.search}`);
+    }
+  }
+
   function bindEvents() {
     elements.loginButton.addEventListener("click", () => openLogin());
 
@@ -1355,20 +1547,36 @@ busyDialog: document.getElementById("busy-dialog"),
 
     elements.objectGrid.addEventListener("click", (event) => {
       const button = event.target.closest("button[data-action]");
-      if (!button) {
+      if (button) {
+        if (button.dataset.action === "edit-object") {
+          openEditObject(button.dataset.id);
+        } else if (button.dataset.action === "busy-object") {
+          openBusyObject(button.dataset.id);
+        } else if (button.dataset.action === "reserve-object") {
+          openReserveObject(button.dataset.id);
+        } else if (button.dataset.action === "release-object") {
+          releaseObject(button.dataset.id);
+        } else if (button.dataset.action === "delete-object") {
+          deleteObject(button.dataset.id);
+        }
         return;
       }
-      if (button.dataset.action === "edit-object") {
-        openEditObject(button.dataset.id);
-      } else if (button.dataset.action === "busy-object") {
-        openBusyObject(button.dataset.id);
-      } else if (button.dataset.action === "reserve-object") {
-        openReserveObject(button.dataset.id);
-      } else if (button.dataset.action === "release-object") {
-        releaseObject(button.dataset.id);
-      } else if (button.dataset.action === "delete-object") {
-        deleteObject(button.dataset.id);
+      const card = event.target.closest(".object-card");
+      if (card && card.dataset.id) {
+        openDetail(card.dataset.id);
       }
+    });
+
+    elements.objectGrid.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const card = event.target.closest(".object-card");
+      if (!card || card !== event.target || !card.dataset.id) {
+        return;
+      }
+      event.preventDefault();
+      openDetail(card.dataset.id);
     });
 
     elements.reservationsList.addEventListener("click", (event) => {
@@ -1396,12 +1604,55 @@ busyDialog: document.getElementById("busy-dialog"),
         deleteCategory(button.dataset.id);
       }
     });
+
+    const stepDetailImage = (delta) => {
+      const count = state.detailImages.length;
+      if (count < 2) {
+        return;
+      }
+      state.detailIndex = (state.detailIndex + delta + count) % count;
+      renderDetailGallery();
+    };
+
+    elements.detailPrev.addEventListener("click", () => stepDetailImage(-1));
+    elements.detailNext.addEventListener("click", () => stepDetailImage(1));
+
+    elements.detailThumbs.addEventListener("click", (event) => {
+      const thumb = event.target.closest("button.detail-thumb");
+      if (!thumb) {
+        return;
+      }
+      state.detailIndex = Number(thumb.dataset.index);
+      renderDetailGallery();
+    });
+
+    elements.detailEdit.addEventListener("click", () => {
+      if (!state.detailObjectId) {
+        return;
+      }
+      const id = state.detailObjectId;
+      closeDialog(elements.detailDialog);
+      openEditObject(id);
+    });
+
+    elements.detailDialog.addEventListener("close", () => {
+      state.detailObjectId = null;
+      state.detailImages = [];
+      state.detailIndex = 0;
+      state.detailName = "";
+      elements.detailContent.hidden = true;
+      elements.detailLoading.hidden = true;
+      clearDetailHash();
+    });
+
+    window.addEventListener("hashchange", handleRoute);
   }
 
   async function init() {
     bindEvents();
     await loadSession();
     await Promise.all([loadCategories(), loadObjects()]);
+    handleRoute();
   }
 
   init();
