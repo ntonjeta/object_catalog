@@ -115,7 +115,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity, peerRepo, remoteObjectRepo)
 	verifier := activitypub.NewSignatureVerifier(remoteKeyRepo, remoteActors)
 
-	catalog := httpapi.New(auth, objects, categories, httpapi.Config{
+	catalog := httpapi.New(auth, objects, categories, federation, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,
 		UploadDir:    photos.Dir(),
 	}).Handler()

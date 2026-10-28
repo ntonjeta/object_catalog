@@ -16,15 +16,17 @@ type Server struct {
 	auth         *usecase.Auth
 	objects      *usecase.Objects
 	categories   *usecase.Categories
+	federation   *usecase.Federation
 	cookieSecure bool
 	uploadDir    string
 }
 
-func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, cfg Config) *Server {
+func New(auth *usecase.Auth, objects *usecase.Objects, categories *usecase.Categories, federation *usecase.Federation, cfg Config) *Server {
 	return &Server{
 		auth:         auth,
 		objects:      objects,
 		categories:   categories,
+		federation:   federation,
 		cookieSecure: cfg.CookieSecure,
 		uploadDir:    cfg.UploadDir,
 	}
@@ -56,6 +58,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/objects/{id}/images/{imageId}", s.requireAuth(s.deleteObjectImage))
 	mux.HandleFunc("PATCH /api/objects/{id}/reservation", s.requireAuth(s.reserveObject))
 	mux.HandleFunc("DELETE /api/objects/{id}", s.requireAuth(s.deleteObject))
+
+	mux.HandleFunc("GET /api/admin/federation", s.requireAuth(s.federationOverview))
+	mux.HandleFunc("POST /api/admin/federation/peers", s.requireAuth(s.addPeer))
+	mux.HandleFunc("DELETE /api/admin/federation/peers/{id}", s.requireAuth(s.removePeer))
 
 	s.registerStatic(mux)
 	mux.HandleFunc("/", s.notFound)
