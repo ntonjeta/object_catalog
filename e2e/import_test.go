@@ -94,6 +94,9 @@ func TestImportCSVUpsertAndPartialFailures(t *testing.T) {
 	if !equalStrings(dune.Tags, []string{"classic", "scifi"}) {
 		t.Fatalf("updated tags = %v", dune.Tags)
 	}
+	if len(dune.Images) != 0 {
+		t.Fatalf("imported URL cover images = %+v, want empty list", dune.Images)
+	}
 	findObject(t, objects, "Hyperion")
 
 	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/categories", nil)

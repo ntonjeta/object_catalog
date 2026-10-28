@@ -28,6 +28,7 @@ type env struct {
 	anonymous     *http.Client
 	adminEmail    string
 	adminPassword string
+	uploadRoot    string
 }
 
 type categoryDTO struct {
@@ -45,18 +46,25 @@ type categoriesEnvelope struct {
 	Categories []categoryDTO `json:"categories"`
 }
 
+type objectImageDTO struct {
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	Position int    `json:"position"`
+}
+
 type objectDTO struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Description  string       `json:"description"`
-	ImagePath    string       `json:"image_path"`
-	Busy         bool         `json:"busy"`
-	BusyUntil    *time.Time   `json:"busy_until"`
-	ReservedFrom *time.Time   `json:"reserved_from"`
-	Category     *categoryDTO `json:"category"`
-	Tags         []string     `json:"tags"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	ImagePath    string           `json:"image_path"`
+	Images       []objectImageDTO `json:"images"`
+	Busy         bool             `json:"busy"`
+	BusyUntil    *time.Time       `json:"busy_until"`
+	ReservedFrom *time.Time       `json:"reserved_from"`
+	Category     *categoryDTO     `json:"category"`
+	Tags         []string         `json:"tags"`
+	CreatedAt    time.Time        `json:"created_at"`
+	UpdatedAt    time.Time        `json:"updated_at"`
 }
 
 type objectEnvelope struct {
@@ -89,10 +97,11 @@ type errorEnvelope struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	uploadRoot := filepath.Join(t.TempDir(), "static")
 	application, err := app.New(context.Background(), app.Config{
 		DBPath:     filepath.Join(t.TempDir(), "catalog.db"),
 		SessionTTL: time.Hour,
-		UploadDir:  filepath.Join(t.TempDir(), "static"),
+		UploadDir:  uploadRoot,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -121,6 +130,7 @@ func newEnv(t *testing.T) *env {
 		anonymous:     &http.Client{},
 		adminEmail:    adminEmail,
 		adminPassword: adminPassword,
+		uploadRoot:    uploadRoot,
 	}
 }
 
