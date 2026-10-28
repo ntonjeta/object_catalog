@@ -128,6 +128,19 @@ func TestObjectPhotoPathValidation(t *testing.T) {
 	}
 }
 
+func TestValidateObjectImageCount(t *testing.T) {
+	for _, n := range []int{0, 1, 9, 10} {
+		if err := ValidateObjectImageCount(n); err != nil {
+			t.Errorf("ValidateObjectImageCount(%d) = %v, want nil", n, err)
+		}
+	}
+	for _, n := range []int{11, 50} {
+		if err := ValidateObjectImageCount(n); !errors.Is(err, ErrInvalid) {
+			t.Errorf("ValidateObjectImageCount(%d) = %v, want ErrInvalid", n, err)
+		}
+	}
+}
+
 func TestNewID(t *testing.T) {
 	first, err := NewID()
 	if err != nil {
