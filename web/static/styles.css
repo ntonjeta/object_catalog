@@ -266,6 +266,40 @@ input[type="file"] {
   object-fit: contain;
 }
 
+.image-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.image-tile {
+  display: grid;
+  gap: 6px;
+}
+
+.image-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 7px;
+  background: var(--surface);
+  object-fit: cover;
+}
+
+.image-tile-actions {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+.image-tile-actions .button {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
 .toolbar-clear {
   min-height: 43px;
 }
