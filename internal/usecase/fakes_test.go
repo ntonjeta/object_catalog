@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -407,8 +408,9 @@ func (f *fakeInstanceKeys) Get(_ context.Context) (domain.InstanceKey, error) {
 }
 
 type fakeOutbox struct {
-	entries  []domain.OutboxEntry
-	appended []domain.OutboxEntry
+	entries   []domain.OutboxEntry
+	appended  []domain.OutboxEntry
+	appendErr error
 }
 
 func newFakeOutbox() *fakeOutbox {
@@ -416,6 +418,9 @@ func newFakeOutbox() *fakeOutbox {
 }
 
 func (f *fakeOutbox) Append(_ context.Context, entry domain.OutboxEntry) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
 	f.entries = append(f.entries, entry)
 	f.appended = append(f.appended, entry)
 	return nil
@@ -601,10 +606,13 @@ func (l *fakeCallLog) record(op string) {
 }
 
 type fakePeers struct {
-	peers    []domain.Peer
-	removed  []string
-	accepted []string
-	log      *fakeCallLog
+	peers         []domain.Peer
+	removed       []string
+	accepted      []string
+	removeErr     error
+	outbox        *fakeOutbox
+	remoteObjects *fakeRemoteObjects
+	log           *fakeCallLog
 }
 
 func newFakePeers() *fakePeers {
@@ -626,6 +634,27 @@ func (f *fakePeers) Upsert(_ context.Context, peer domain.Peer) error {
 	}
 	f.peers = append(f.peers, peer)
 	return nil
+}
+
+// Join applies the same atomic peer+outbox mutation as the sqlite adapter.
+func (f *fakePeers) Join(ctx context.Context, peer domain.Peer, follow domain.OutboxEntry) (domain.Peer, error) {
+	before := append([]domain.Peer(nil), f.peers...)
+	rollback := func() {
+		f.peers = before
+	}
+	if err := f.Upsert(ctx, peer); err != nil {
+		return domain.Peer{}, err
+	}
+	stored, err := f.ByFollowActivityID(ctx, peer.FollowActivityID)
+	if err != nil {
+		rollback()
+		return domain.Peer{}, err
+	}
+	if err := f.outbox.Append(ctx, follow); err != nil {
+		rollback()
+		return domain.Peer{}, err
+	}
+	return stored, nil
 }
 
 func (f *fakePeers) MarkAccepted(_ context.Context, actorID string) error {
@@ -658,6 +687,9 @@ func (f *fakePeers) ByID(_ context.Context, id string) (domain.Peer, error) {
 }
 
 func (f *fakePeers) Remove(_ context.Context, id string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
 	for i, peer := range f.peers {
 		if peer.ID == id {
 			f.peers = append(f.peers[:i], f.peers[i+1:]...)
@@ -669,6 +701,45 @@ func (f *fakePeers) Remove(_ context.Context, id string) error {
 	return domain.ErrNotFound
 }
 
+// Leave applies the same atomic outbox+mirror+peer mutation as sqlite. The
+// snapshots make injected mid-operation failures roll back every fake table.
+func (f *fakePeers) Leave(ctx context.Context, peer domain.Peer, undo domain.OutboxEntry) error {
+	peersBefore := append([]domain.Peer(nil), f.peers...)
+	removedBefore := append([]string(nil), f.removed...)
+	entriesBefore := append([]domain.OutboxEntry(nil), f.outbox.entries...)
+	appendedBefore := append([]domain.OutboxEntry(nil), f.outbox.appended...)
+	objectsBefore := append([]domain.RemoteObject(nil), f.remoteObjects.objects...)
+	deletedPeersBefore := append([]string(nil), f.remoteObjects.deletedPeers...)
+	var opsBefore []string
+	if f.log != nil {
+		opsBefore = append([]string(nil), f.log.ops...)
+	}
+	rollback := func() {
+		f.peers = peersBefore
+		f.removed = removedBefore
+		f.outbox.entries = entriesBefore
+		f.outbox.appended = appendedBefore
+		f.remoteObjects.objects = objectsBefore
+		f.remoteObjects.deletedPeers = deletedPeersBefore
+		if f.log != nil {
+			f.log.ops = opsBefore
+		}
+	}
+	if err := f.outbox.Append(ctx, undo); err != nil {
+		rollback()
+		return err
+	}
+	if err := f.remoteObjects.DeleteByPeer(ctx, peer.ActorID); err != nil {
+		rollback()
+		return err
+	}
+	if err := f.Remove(ctx, peer.ID); err != nil {
+		rollback()
+		return err
+	}
+	return nil
+}
+
 func (f *fakePeers) List(_ context.Context) ([]domain.Peer, error) {
 	peers := make([]domain.Peer, len(f.peers))
 	copy(peers, f.peers)
@@ -676,11 +747,14 @@ func (f *fakePeers) List(_ context.Context) ([]domain.Peer, error) {
 }
 
 type fakeRemoteObjects struct {
-	objects      []domain.RemoteObject
-	puts         []domain.RemoteObject
-	deleted      []string
-	deletedPeers []string
-	log          *fakeCallLog
+	objects         []domain.RemoteObject
+	puts            []domain.RemoteObject
+	deleted         []string
+	deletedPeers    []string
+	deleteByPeerErr error
+	beforePut       func()
+	peers           *fakePeers
+	log             *fakeCallLog
 }
 
 func newFakeRemoteObjects() *fakeRemoteObjects {
@@ -688,7 +762,14 @@ func newFakeRemoteObjects() *fakeRemoteObjects {
 }
 
 // Put mirrors the sqlite upsert: the row for the given id is replaced whole.
-func (f *fakeRemoteObjects) Put(_ context.Context, object domain.RemoteObject) error {
+func (f *fakeRemoteObjects) Put(ctx context.Context, object domain.RemoteObject) error {
+	if f.beforePut != nil {
+		f.beforePut()
+	}
+	return f.put(ctx, object)
+}
+
+func (f *fakeRemoteObjects) put(_ context.Context, object domain.RemoteObject) error {
 	for i, existing := range f.objects {
 		if existing.ID == object.ID {
 			f.objects[i] = object
@@ -698,6 +779,41 @@ func (f *fakeRemoteObjects) Put(_ context.Context, object domain.RemoteObject) e
 	}
 	f.objects = append(f.objects, object)
 	f.puts = append(f.puts, object)
+	return nil
+}
+
+func (f *fakeRemoteObjects) acceptedPeer(actorID string) bool {
+	if f.peers == nil {
+		return false
+	}
+	for _, peer := range f.peers.peers {
+		if peer.ActorID == actorID && peer.State == domain.PeerAccepted {
+			return true
+		}
+	}
+	return false
+}
+
+// PutFromAcceptedPeer runs the deterministic interleaving hook before its
+// accepted check, then keeps the check and write together just like sqlite's
+// transaction. Removal therefore either happens first (drop) or after (cascade).
+func (f *fakeRemoteObjects) PutFromAcceptedPeer(ctx context.Context, object domain.RemoteObject) error {
+	if f.beforePut != nil {
+		f.beforePut()
+	}
+	if !f.acceptedPeer(object.PeerActorID) {
+		return nil
+	}
+	return f.put(ctx, object)
+}
+
+func (f *fakeRemoteObjects) DeleteFromAcceptedPeer(ctx context.Context, id, peerActorID string) error {
+	if !f.acceptedPeer(peerActorID) {
+		return nil
+	}
+	if err := f.Delete(ctx, id); err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
 	return nil
 }
 
@@ -713,6 +829,9 @@ func (f *fakeRemoteObjects) Delete(_ context.Context, id string) error {
 }
 
 func (f *fakeRemoteObjects) DeleteByPeer(_ context.Context, peerActorID string) error {
+	if f.deleteByPeerErr != nil {
+		return f.deleteByPeerErr
+	}
 	kept := make([]domain.RemoteObject, 0, len(f.objects))
 	for _, object := range f.objects {
 		if object.PeerActorID != peerActorID {

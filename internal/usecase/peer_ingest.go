@@ -32,24 +32,6 @@ const (
 	availabilityOnLoanPrefix = "on loan until "
 )
 
-// isAcceptedPeer reports whether actorID names a peer whose follow the remote
-// instance accepted. Ingest is gated on the peers table so a signature-
-// verified but unknown actor cannot inject content. A peers lookup failure is
-// returned, not swallowed: dropping live content on a transient DB error
-// would mark the event processed for good.
-func (f *Federation) isAcceptedPeer(ctx context.Context, actorID string) (bool, error) {
-	peers, err := f.peers.List(ctx)
-	if err != nil {
-		return false, fmt.Errorf("list peers: %w", err)
-	}
-	for _, peer := range peers {
-		if peer.ActorID == actorID && peer.State == domain.PeerAccepted {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // processAccept marks the peer whose Follow activity this Accept answers.
 // Accepts we cannot match — an unknown follow activity, or one sent by an
 // actor other than the peer that owns the follow — are dropped without error.
@@ -71,12 +53,12 @@ func (f *Federation) processAccept(ctx context.Context, event domain.InboxEvent)
 // announces. An article that does not parse is dropped and logged: known
 // content failures must not retry forever, only repository failures do.
 func (f *Federation) ingestArticle(ctx context.Context, event domain.InboxEvent) error {
-	object, ok := decodePeerArticle([]byte(event.Payload), event.Actor)
+	object, ok := decodePeerArticle([]byte(event.Payload), event.Actor, event.ReceivedAt)
 	if !ok {
 		log.Printf("federation: dropping unparseable article %q from peer %q", event.ObjectID, event.Actor)
 		return nil
 	}
-	return f.remoteObjects.Put(ctx, object)
+	return f.remoteObjects.PutFromAcceptedPeer(ctx, object)
 }
 
 // peerActivityEnvelope is the part of an activity JSON document ingest needs
@@ -84,8 +66,9 @@ func (f *Federation) ingestArticle(ctx context.Context, event domain.InboxEvent)
 // serializer's output (adapter/activitypub serialize.go): the full Article
 // is embedded in "object"; the url field is accepted and ignored.
 type peerActivityEnvelope struct {
-	Actor  string          `json:"actor"`
-	Object json.RawMessage `json:"object"`
+	Actor     string          `json:"actor"`
+	Published string          `json:"published"`
+	Object    json.RawMessage `json:"object"`
 }
 
 type peerArticle struct {
@@ -112,8 +95,9 @@ type peerArticlePart struct {
 // does not match peerActorID, the article id is missing or not an absolute
 // http(s) URL, the article id fails the origin rule (its scheme+host must
 // equal the peer actor's, case-insensitively), or the name is empty after
-// truncation. Everything else is clamped or cleared, never rejected.
-func decodePeerArticle(payload []byte, peerActorID string) (domain.RemoteObject, bool) {
+// truncation. Everything else is clamped or cleared, never rejected. Missing
+// article timestamps fall back to the activity's published time, then receipt.
+func decodePeerArticle(payload []byte, peerActorID string, receivedAt time.Time) (domain.RemoteObject, bool) {
 	var envelope peerActivityEnvelope
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return domain.RemoteObject{}, false
@@ -154,6 +138,19 @@ func decodePeerArticle(payload []byte, peerActorID string) (domain.RemoteObject,
 	if object.UpdatedAt.IsZero() {
 		object.UpdatedAt = object.CreatedAt
 	}
+	fallback := parsePeerTime(envelope.Published)
+	if fallback.IsZero() {
+		fallback = receivedAt.UTC()
+	}
+	if fallback.IsZero() {
+		fallback = time.Now().UTC()
+	}
+	if object.CreatedAt.IsZero() {
+		object.CreatedAt = fallback
+	}
+	if object.UpdatedAt.IsZero() {
+		object.UpdatedAt = fallback
+	}
 
 	var tags []string
 	for _, part := range article.Attachment {
@@ -191,18 +188,18 @@ func urlOrigin(raw string) (string, bool) {
 }
 
 // parseAvailability maps the Availability attachment onto the mirrored busy
-// state. "on loan" keeps the object busy without an expiry; the
-// "on loan until " prefix fails closed — an unparseable or missing timestamp
-// still reports Busy with a nil expiry, because under-reporting a loan would
-// show a lent-out item as free. Anything without the loan wording reads as
-// available.
+// state. Any trimmed "on loan..." wording fails closed unless it has a valid
+// "on loan until <RFC3339>" expiry: malformed or missing timestamps report
+// Busy with a nil expiry, because under-reporting a loan would show a lent-out
+// item as free. Anything without the loan wording reads as available.
 func parseAvailability(content string) (bool, *time.Time) {
-	if content == availabilityOnLoan {
-		return true, nil
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, availabilityOnLoan) {
+		return false, nil
 	}
 	expiry := strings.TrimPrefix(content, availabilityOnLoanPrefix)
 	if expiry == content {
-		return false, nil
+		return true, nil
 	}
 	until, err := time.Parse(time.RFC3339, strings.TrimSpace(expiry))
 	if err != nil {

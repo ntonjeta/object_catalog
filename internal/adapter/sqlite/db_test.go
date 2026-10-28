@@ -819,3 +819,148 @@ func TestRemoteObjectRepoDeleteByPeer(t *testing.T) {
 		t.Fatalf("second Delete error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestPeerRepoJoinRollsBackWhenFollowFails(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	repo := NewPeerRepo(db)
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_follow_insert
+		BEFORE INSERT ON outbox WHEN NEW.id = 'follow-1'
+		BEGIN SELECT RAISE(ABORT, 'injected follow insert failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	peer := domain.Peer{
+		ID: "peer-1", ActorID: "https://peer.example/ap/actor", InboxURL: "https://peer.example/ap/inbox",
+		FollowActivityID: "https://us.example/ap/outbox/follow-1", State: domain.PeerPending, CreatedAt: time.Now().UTC(),
+	}
+	_, err := repo.Join(ctx, peer, domain.OutboxEntry{
+		ID: "follow-1", Kind: domain.OutboxFollow, Target: peer.ActorID,
+		FollowID: peer.FollowActivityID, Published: peer.CreatedAt,
+	})
+	if err == nil {
+		t.Fatal("Join error = nil, want injected outbox failure")
+	}
+	for _, table := range []string{"peers", "outbox"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows = %d, want rollback to zero", table, count)
+		}
+	}
+}
+
+func TestPeerRepoLeaveRollsBackWhenMirrorDeleteFails(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	peers := NewPeerRepo(db)
+	remotes := NewRemoteObjectRepo(db)
+	now := time.Now().UTC()
+	peer := domain.Peer{
+		ID: "peer-1", ActorID: "https://peer.example/ap/actor", InboxURL: "https://peer.example/ap/inbox",
+		FollowActivityID: "https://us.example/ap/outbox/follow-1", State: domain.PeerAccepted, CreatedAt: now,
+	}
+	if err := peers.Upsert(ctx, peer); err != nil {
+		t.Fatalf("seed peer: %v", err)
+	}
+	if err := remotes.Put(ctx, domain.RemoteObject{
+		ID: "https://peer.example/ap/objects/1", PeerActorID: peer.ActorID, Name: "Dune",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed mirror: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER fail_mirror_delete
+		BEFORE DELETE ON remote_objects
+		BEGIN SELECT RAISE(ABORT, 'injected mirror delete failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := peers.Leave(ctx, peer, domain.OutboxEntry{
+		ID: "undo-1", Kind: domain.OutboxUndo, Target: peer.ActorID,
+		FollowID: peer.FollowActivityID, Published: now,
+	})
+	if err == nil {
+		t.Fatal("Leave error = nil, want injected mirror delete failure")
+	}
+	for table, want := range map[string]int{"peers": 1, "remote_objects": 1, "outbox": 0} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != want {
+			t.Fatalf("%s rows = %d, want %d after rollback", table, count, want)
+		}
+	}
+}
+
+func TestRemoteObjectRepoMutationsRequireAcceptedPeer(t *testing.T) {
+	ctx := context.Background()
+	db := openDB(t)
+	peers := NewPeerRepo(db)
+	remotes := NewRemoteObjectRepo(db)
+	now := time.Now().UTC()
+	peer := domain.Peer{
+		ID: "peer-1", ActorID: "https://peer.example/ap/actor", InboxURL: "https://peer.example/ap/inbox",
+		FollowActivityID: "https://us.example/ap/outbox/follow-1", State: domain.PeerPending, CreatedAt: now,
+	}
+	object := domain.RemoteObject{
+		ID: "https://peer.example/ap/objects/1", PeerActorID: peer.ActorID, Name: "Dune",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_objects`).Scan(&n); err != nil {
+			t.Fatalf("count mirrors: %v", err)
+		}
+		return n
+	}
+
+	if err := remotes.PutFromAcceptedPeer(ctx, object); err != nil {
+		t.Fatalf("put without peer: %v", err)
+	}
+	if count() != 0 {
+		t.Fatal("unknown peer stored a mirror")
+	}
+	if err := peers.Upsert(ctx, peer); err != nil {
+		t.Fatalf("seed pending peer: %v", err)
+	}
+	if err := remotes.PutFromAcceptedPeer(ctx, object); err != nil {
+		t.Fatalf("put for pending peer: %v", err)
+	}
+	if count() != 0 {
+		t.Fatal("pending peer stored a mirror")
+	}
+	if err := peers.MarkAccepted(ctx, peer.ActorID); err != nil {
+		t.Fatalf("accept peer: %v", err)
+	}
+	if err := remotes.PutFromAcceptedPeer(ctx, object); err != nil {
+		t.Fatalf("put for accepted peer: %v", err)
+	}
+	if count() != 1 {
+		t.Fatal("accepted peer did not store its mirror")
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE peers SET state = ?`, string(domain.PeerPending)); err != nil {
+		t.Fatalf("reset peer pending: %v", err)
+	}
+	if err := remotes.DeleteFromAcceptedPeer(ctx, object.ID, peer.ActorID); err != nil {
+		t.Fatalf("delete for pending peer: %v", err)
+	}
+	if count() != 1 {
+		t.Fatal("pending peer deleted a mirror")
+	}
+	if err := peers.MarkAccepted(ctx, peer.ActorID); err != nil {
+		t.Fatalf("re-accept peer: %v", err)
+	}
+	if err := remotes.DeleteFromAcceptedPeer(ctx, "https://peer.example/ap/objects/missing", peer.ActorID); err != nil {
+		t.Fatalf("delete unknown mirror: %v", err)
+	}
+	if err := remotes.DeleteFromAcceptedPeer(ctx, object.ID, peer.ActorID); err != nil {
+		t.Fatalf("delete for accepted peer: %v", err)
+	}
+	if count() != 0 {
+		t.Fatal("accepted peer tombstone did not delete its mirror")
+	}
+}

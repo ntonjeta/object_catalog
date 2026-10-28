@@ -10,13 +10,13 @@ import (
 	"biblio-oggetto/internal/domain"
 )
 
-type outboxExecer interface {
+type dbExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // appendOutboxTx inserts a federation outbox entry within the given
 // transaction. A zero entry (empty ID) is skipped.
-func appendOutboxTx(ctx context.Context, execer outboxExecer, entry domain.OutboxEntry) error {
+func appendOutboxTx(ctx context.Context, execer dbExecer, entry domain.OutboxEntry) error {
 	if entry.ID == "" {
 		return nil
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // RemoteObjectRepo mirrors objects announced by joined peers. The merged
-// catalog (Task 3) reads the rows directly, so only writes live here.
+// catalog reads the rows directly; accepted-peer ingest writes live here.
 type RemoteObjectRepo struct {
 	db *sql.DB
 }
@@ -27,8 +27,17 @@ func (r *RemoteObjectRepo) Put(ctx context.Context, object domain.RemoteObject) 
 		return fmt.Errorf("begin remote object store: %w", err)
 	}
 	defer tx.Rollback()
+	if err := putRemoteObjectTx(ctx, tx, object); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit remote object store: %w", err)
+	}
+	return nil
+}
 
-	_, err = tx.ExecContext(ctx,
+func putRemoteObjectTx(ctx context.Context, tx *sql.Tx, object domain.RemoteObject) error {
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO remote_objects (
 			id, peer_actor_id, name, description, image_url, busy, busy_until,
 			category_name, published_at, updated_at)
@@ -50,13 +59,62 @@ func (r *RemoteObjectRepo) Put(ctx context.Context, object domain.RemoteObject) 
 	if err != nil {
 		return mapError(err)
 	}
-	if err := replaceTagsIn(ctx, tx, remoteObjectTagsTable, object.ID, object.Tags); err != nil {
+	return replaceTagsIn(ctx, tx, remoteObjectTagsTable, object.ID, object.Tags)
+}
+
+// PutFromAcceptedPeer checks the join gate and upserts the mirror in one
+// transaction. With the app's single SQLite connection, Leave cannot delete
+// the peer between those operations and allow an orphaned mirror to commit.
+func (r *RemoteObjectRepo) PutFromAcceptedPeer(ctx context.Context, object domain.RemoteObject) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin accepted remote object store: %w", err)
+	}
+	defer tx.Rollback()
+	accepted, err := acceptedPeerTx(ctx, tx, object.PeerActorID)
+	if err != nil || !accepted {
+		return err
+	}
+	if err := putRemoteObjectTx(ctx, tx, object); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit remote object store: %w", err)
+		return fmt.Errorf("commit accepted remote object store: %w", err)
 	}
 	return nil
+}
+
+// DeleteFromAcceptedPeer applies a tombstone only while its announcing peer
+// is accepted. Unknown object ids are a no-op so duplicate Deletes complete.
+func (r *RemoteObjectRepo) DeleteFromAcceptedPeer(ctx context.Context, id, peerActorID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin accepted remote object delete: %w", err)
+	}
+	defer tx.Rollback()
+	accepted, err := acceptedPeerTx(ctx, tx, peerActorID)
+	if err != nil || !accepted {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_objects WHERE id = ?`, id); err != nil {
+		return mapError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit accepted remote object delete: %w", err)
+	}
+	return nil
+}
+
+func acceptedPeerTx(ctx context.Context, tx *sql.Tx, actorID string) (bool, error) {
+	var state string
+	err := tx.QueryRowContext(ctx, `SELECT state FROM peers WHERE actor_id = ?`, actorID).Scan(&state)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, mapError(err)
+	}
+	return state == string(domain.PeerAccepted), nil
 }
 
 func (r *RemoteObjectRepo) Delete(ctx context.Context, id string) error {

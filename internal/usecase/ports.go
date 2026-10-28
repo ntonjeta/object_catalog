@@ -106,24 +106,25 @@ type RemoteActorRepository interface {
 	Resolve(ctx context.Context, input string) (domain.RemoteActor, error)
 }
 
-// PeerRepository stores the peer instances this instance follows. Upsert keys
-// on the peer actor id: a re-join refreshes the inbox URL, the follow activity
-// id and the state (back to pending) while keeping the original created time.
+// PeerRepository stores the peer instances this instance follows. Join and
+// Leave each persist the peer, its outbox activity and (for Leave) its mirrors
+// atomically. Join keys on actor id: a re-join refreshes the inbox URL, follow
+// activity id and state while keeping the original id and created time.
 type PeerRepository interface {
-	Upsert(ctx context.Context, peer domain.Peer) error
+	Join(ctx context.Context, peer domain.Peer, follow domain.OutboxEntry) (domain.Peer, error)
 	MarkAccepted(ctx context.Context, actorID string) error
 	ByFollowActivityID(ctx context.Context, followActivityID string) (domain.Peer, error)
 	ByID(ctx context.Context, id string) (domain.Peer, error)
-	Remove(ctx context.Context, id string) error
+	Leave(ctx context.Context, peer domain.Peer, undo domain.OutboxEntry) error
 	List(ctx context.Context) ([]domain.Peer, error)
 }
 
-// RemoteObjectRepository mirrors objects announced by joined peers. Put
-// replaces the row and its tags for the given object id.
+// RemoteObjectRepository mirrors objects announced by joined peers. Each
+// mutation checks the announcing peer's accepted state in the same transaction
+// as the write, so removal cannot interleave and leave an unowned mirror.
 type RemoteObjectRepository interface {
-	Put(ctx context.Context, object domain.RemoteObject) error
-	Delete(ctx context.Context, id string) error
-	// DeleteByPeer drops every object mirrored from one peer. It succeeds
-	// even when the peer has mirrored nothing.
-	DeleteByPeer(ctx context.Context, peerActorID string) error
+	PutFromAcceptedPeer(ctx context.Context, object domain.RemoteObject) error
+	// DeleteFromAcceptedPeer tolerates an unknown object id because duplicate
+	// ActivityPub Delete deliveries are normal.
+	DeleteFromAcceptedPeer(ctx context.Context, id, peerActorID string) error
 }

@@ -131,10 +131,6 @@ func (f *Federation) processInboxEvent(ctx context.Context, event domain.InboxEv
 	case event.Type == "Accept":
 		return f.processAccept(ctx, event)
 	case event.Type == "Create", event.Type == "Update":
-		accepted, err := f.isAcceptedPeer(ctx, event.Actor)
-		if err != nil || !accepted {
-			return err
-		}
 		return f.ingestArticle(ctx, event)
 	case event.Type == "Delete":
 		if event.ObjectID == "" {
@@ -148,18 +144,10 @@ func (f *Federation) processInboxEvent(ctx context.Context, event domain.InboxEv
 			log.Printf("federation: peer delete rejected for foreign origin %q", event.ObjectID)
 			return nil
 		}
-		accepted, err := f.isAcceptedPeer(ctx, event.Actor)
-		if err != nil || !accepted {
-			return err
-		}
-		// Duplicate and retried Delete deliveries are normal ActivityPub
-		// traffic, so a tombstone for an id that was never mirrored (or is
-		// already gone) is a known content failure: ErrNotFound drops to nil
-		// and the event is marked processed instead of requeued forever.
-		if err := f.remoteObjects.Delete(ctx, event.ObjectID); err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return err
-		}
-		return nil
+		// The accepted-peer check and delete share one storage transaction;
+		// unknown ids are tolerated by the repository because duplicate and
+		// retried Delete deliveries are normal ActivityPub traffic.
+		return f.remoteObjects.DeleteFromAcceptedPeer(ctx, event.ObjectID, event.Actor)
 	default:
 		return nil
 	}
@@ -307,29 +295,18 @@ func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, e
 		State:            domain.PeerPending,
 		CreatedAt:        now,
 	}
-	if err := f.peers.Upsert(ctx, peer); err != nil {
-		return domain.Peer{}, err
-	}
-	stored, err := f.peers.ByFollowActivityID(ctx, peer.FollowActivityID)
-	if err != nil {
-		return domain.Peer{}, err
-	}
-	if err := f.outbox.Append(ctx, domain.OutboxEntry{
+	return f.peers.Join(ctx, peer, domain.OutboxEntry{
 		ID:        id,
 		Kind:      domain.OutboxFollow,
 		Target:    remote.ID,
 		FollowID:  peer.FollowActivityID,
 		Published: now,
-	}); err != nil {
-		return domain.Peer{}, err
-	}
-	return stored, nil
+	})
 }
 
-// RemovePeer leaves a peer instance: it queues the Undo of the stored follow,
-// drops the objects mirrored from the peer and only then the peer row. The
-// cascade runs before the row is removed so any mid-sequence failure keeps
-// the peer listed and the removal retryable.
+// RemovePeer leaves a peer instance: it atomically queues the Undo of the
+// stored follow, drops the objects mirrored from the peer and removes the peer
+// row. A failure leaves the original state intact so removal can be retried.
 func (f *Federation) RemovePeer(ctx context.Context, id string) error {
 	peer, err := f.peers.ByID(ctx, id)
 	if err != nil {
@@ -339,19 +316,13 @@ func (f *Federation) RemovePeer(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("generate outbox id: %w", err)
 	}
-	if err := f.outbox.Append(ctx, domain.OutboxEntry{
+	return f.peers.Leave(ctx, peer, domain.OutboxEntry{
 		ID:        undoID,
 		Kind:      domain.OutboxUndo,
 		Target:    peer.ActorID,
 		FollowID:  peer.FollowActivityID,
 		Published: time.Now().UTC(),
-	}); err != nil {
-		return err
-	}
-	if err := f.remoteObjects.DeleteByPeer(ctx, peer.ActorID); err != nil {
-		return err
-	}
-	return f.peers.Remove(ctx, id)
+	})
 }
 
 // Peers lists joined peer instances oldest first.

@@ -20,7 +20,10 @@ func newTestFederation() (*Federation, *fakeOutbox, *fakeFollowers, *fakeRemoteA
 	remoteObjects := newFakeRemoteObjects()
 	callLog := &fakeCallLog{}
 	peers.log = callLog
+	peers.outbox = outbox
+	peers.remoteObjects = remoteObjects
 	remoteObjects.log = callLog
+	remoteObjects.peers = peers
 	identity := NewIdentity(&fakeInstanceKeys{}, "https://catalog.example.com")
 	return NewFederation(outbox, followers, actors, inbox, identity, peers, remoteObjects), outbox, followers, actors, inbox, peers, remoteObjects
 }
@@ -301,6 +304,23 @@ func TestAddPeerUnresolvableTarget(t *testing.T) {
 	}
 }
 
+func TestAddPeerOutboxFailureLeavesNoPeer(t *testing.T) {
+	ctx := context.Background()
+	federation, outbox, _, actors, _, peers, _ := newTestFederation()
+	actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+		ID:       "https://peer/ap/actors/catalog",
+		InboxURL: "https://peer/ap/inbox",
+	}
+	outbox.appendErr = errors.New("injected outbox failure")
+
+	if _, err := federation.AddPeer(ctx, "https://peer/ap/actors/catalog"); !errors.Is(err, outbox.appendErr) {
+		t.Fatalf("add peer error = %v, want injected outbox failure", err)
+	}
+	if len(peers.peers) != 0 || len(outbox.entries) != 0 {
+		t.Fatalf("failed join left peers %+v / outbox %+v, want no partial state", peers.peers, outbox.entries)
+	}
+}
+
 func TestAddPeerRejoinResetsPending(t *testing.T) {
 	ctx := context.Background()
 	federation, outbox, _, actors, _, peers, _ := newTestFederation()
@@ -421,6 +441,40 @@ func TestRemovePeerQueuesUndoAndCascades(t *testing.T) {
 	}
 }
 
+func TestRemovePeerFailureLeavesOriginalState(t *testing.T) {
+	for _, stage := range []string{"mirror delete", "peer remove"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			federation, outbox, _, actors, _, peers, remoteObjects := newTestFederation()
+			actors.actors["https://peer/ap/actors/catalog"] = domain.RemoteActor{
+				ID:       "https://peer/ap/actors/catalog",
+				InboxURL: "https://peer/ap/inbox",
+			}
+			peer, err := federation.AddPeer(ctx, "https://peer/ap/actors/catalog")
+			if err != nil {
+				t.Fatalf("add peer: %v", err)
+			}
+			remoteObjects.objects = append(remoteObjects.objects, domain.RemoteObject{
+				ID: "https://peer/ap/objects/1", PeerActorID: peer.ActorID,
+			})
+			injected := errors.New("injected " + stage + " failure")
+			if stage == "mirror delete" {
+				remoteObjects.deleteByPeerErr = injected
+			} else {
+				peers.removeErr = injected
+			}
+
+			if err := federation.RemovePeer(ctx, peer.ID); !errors.Is(err, injected) {
+				t.Fatalf("remove peer error = %v, want injected failure", err)
+			}
+			if len(peers.peers) != 1 || len(remoteObjects.objects) != 1 || len(outbox.entries) != 1 {
+				t.Fatalf("failed leave left peers %+v / mirrors %+v / outbox %+v, want original state",
+					peers.peers, remoteObjects.objects, outbox.entries)
+			}
+		})
+	}
+}
+
 func TestPeersLists(t *testing.T) {
 	ctx := context.Background()
 	federation, _, _, _, _, peers, _ := newTestFederation()
@@ -457,7 +511,9 @@ func seedTestPeer(peers *fakePeers, actorID string, state domain.PeerState) doma
 
 func addTestInboxEvent(t *testing.T, ctx context.Context, inbox *fakeInboxEvents, event domain.InboxEvent) {
 	t.Helper()
-	event.ReceivedAt = time.Now().UTC()
+	if event.ReceivedAt.IsZero() {
+		event.ReceivedAt = time.Now().UTC()
+	}
 	if err := inbox.Add(ctx, event); err != nil {
 		t.Fatalf("enqueue %s: %v", event.ID, err)
 	}
@@ -630,6 +686,69 @@ func TestIngestCreateStoresRemoteObject(t *testing.T) {
 	}
 }
 
+func TestIngestRemoveBeforePutDoesNotOrphanMirror(t *testing.T) {
+	ctx := context.Background()
+	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+	peer := seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+	addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+		ID: "https://peer.example/ap/outbox/create-remove-race", Type: "Create", Actor: testPeerActor,
+		ObjectID: "https://peer.example/ap/objects/obj-1",
+		Payload:  peerCreatePayload(testPeerActor, peerArticleObject("")),
+	})
+	remoteObjects.beforePut = func() {
+		if err := federation.RemovePeer(ctx, peer.ID); err != nil {
+			t.Fatalf("remove peer during ingest: %v", err)
+		}
+	}
+
+	if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(peers.peers) != 0 {
+		t.Fatalf("peers = %+v, want removed peer", peers.peers)
+	}
+	if len(remoteObjects.objects) != 0 {
+		t.Fatalf("remote objects = %+v, want no mirror without an accepted peer", remoteObjects.objects)
+	}
+	assertAllProcessed(t, inbox)
+}
+
+func TestIngestTimestampsFallBackToActivityAndReceipt(t *testing.T) {
+	activityTime := mustPeerTime(t, "2026-10-02T03:04:05Z")
+	receiptTime := mustPeerTime(t, "2026-10-03T04:05:06Z")
+	for _, tc := range []struct {
+		name              string
+		activityPublished string
+		want              time.Time
+	}{
+		{name: "activity published", activityPublished: `"published":"2026-10-02T03:04:05Z",`, want: activityTime},
+		{name: "inbox receipt", want: receiptTime},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
+			seedTestPeer(peers, testPeerActor, domain.PeerAccepted)
+			payload := `{"id":"https://peer.example/ap/outbox/create-no-times","type":"Create","actor":"` + testPeerActor + `",` +
+				tc.activityPublished + `"object":` + peerArticleObject("") + `}`
+			addTestInboxEvent(t, ctx, inbox, domain.InboxEvent{
+				ID: "https://peer.example/ap/outbox/create-no-times", Type: "Create", Actor: testPeerActor,
+				ObjectID: "https://peer.example/ap/objects/obj-1", Payload: payload, ReceivedAt: receiptTime,
+			})
+
+			if err := federation.ProcessPendingInbox(ctx, time.Now().UTC()); err != nil {
+				t.Fatalf("process: %v", err)
+			}
+			if len(remoteObjects.puts) != 1 {
+				t.Fatalf("puts = %+v, want one mirror", remoteObjects.puts)
+			}
+			got := remoteObjects.puts[0]
+			if !got.CreatedAt.Equal(tc.want) || !got.UpdatedAt.Equal(tc.want) {
+				t.Fatalf("timestamps = (%v, %v), want fallback %v", got.CreatedAt, got.UpdatedAt, tc.want)
+			}
+		})
+	}
+}
+
 func TestIngestUpdateAndDelete(t *testing.T) {
 	ctx := context.Background()
 	federation, _, _, _, inbox, peers, remoteObjects := newTestFederation()
@@ -794,7 +913,7 @@ func TestIngestIgnoresNonPeer(t *testing.T) {
 func TestIngestArticleDefensiveParsing(t *testing.T) {
 	dropped := func(t *testing.T, name, object string) {
 		t.Helper()
-		if _, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor); ok {
+		if _, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor, time.Time{}); ok {
 			t.Fatalf("%s: article was ingested, want it dropped", name)
 		}
 	}
@@ -818,7 +937,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 		// Same origin, but the activity names a different actor than the peer.
 		impersonator := `{"@context":"https://www.w3.org/ns/activitystreams","id":"https://peer.example/ap/outbox/a1",` +
 			`"type":"Create","actor":"https://peer.example/ap/actors/other","object":` + peerArticleObject("") + `}`
-		if _, ok := decodePeerArticle([]byte(impersonator), testPeerActor); ok {
+		if _, ok := decodePeerArticle([]byte(impersonator), testPeerActor, time.Time{}); ok {
 			t.Fatal("article from a mismatched activity actor was ingested")
 		}
 	})
@@ -826,7 +945,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 	t.Run("oversized name truncates to 200", func(t *testing.T) {
 		long := strings.Repeat("ü", 500)
 		object := fmt.Sprintf(`{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":%q}`, long)
-		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor)
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("long name dropped, want it truncated and stored")
 		}
@@ -838,7 +957,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 	t.Run("oversized description truncates to 5000", func(t *testing.T) {
 		long := strings.Repeat("d", 6000)
 		object := fmt.Sprintf(`{"id":"https://peer.example/ap/objects/obj-1","type":"Article","name":"Dune","content":%q}`, long)
-		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor)
+		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor, object)), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("long description dropped, want it truncated and stored")
 		}
@@ -849,7 +968,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 
 	t.Run("non-http image dropped", func(t *testing.T) {
 		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
-			peerArticleObject(`,"image":"ftp://peer.example/x.png"`))), testPeerActor)
+			peerArticleObject(`,"image":"ftp://peer.example/x.png"`))), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("article dropped for a bad image, want the image only cleared")
 		}
@@ -860,7 +979,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 
 	t.Run("relative image dropped", func(t *testing.T) {
 		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
-			peerArticleObject(`,"image":"/static/uploads/x.png"`))), testPeerActor)
+			peerArticleObject(`,"image":"/static/uploads/x.png"`))), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("article dropped for a relative image, want the image only cleared")
 		}
@@ -872,7 +991,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 	availability := func(content string) (domain.RemoteObject, bool) {
 		payload := peerCreatePayload(testPeerActor, peerArticleObject(
 			`,"attachment":[{"type":"Note","name":"Availability","content":"`+content+`"}]`))
-		return decodePeerArticle([]byte(payload), testPeerActor)
+		return decodePeerArticle([]byte(payload), testPeerActor, time.Time{})
 	}
 	t.Run("availability on loan", func(t *testing.T) {
 		got, ok := availability("on loan")
@@ -892,6 +1011,18 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 			t.Fatalf("object = %+v (ok %v), want a missing deadline to stay Busy with nil until", got, ok)
 		}
 	})
+	t.Run("availability until without separator or timestamp fails closed", func(t *testing.T) {
+		got, ok := availability("on loan until")
+		if !ok || !got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want missing deadline to stay Busy with nil until", got, ok)
+		}
+	})
+	t.Run("availability unexpected loan wording fails closed", func(t *testing.T) {
+		got, ok := availability("  on loan unexpectedly  ")
+		if !ok || !got.Busy || got.BusyUntil != nil {
+			t.Fatalf("object = %+v (ok %v), want any malformed loan wording to stay Busy with nil until", got, ok)
+		}
+	})
 	t.Run("availability garbage", func(t *testing.T) {
 		got, ok := availability("churned")
 		if !ok || got.Busy || got.BusyUntil != nil {
@@ -905,7 +1036,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 			parts = append(parts, fmt.Sprintf(`{"type":"Tag","name":"#tag%02d"}`, i))
 		}
 		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
-			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor)
+			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("article dropped for 25 tags, want the tag list truncated")
 		}
@@ -922,7 +1053,7 @@ func TestIngestArticleDefensiveParsing(t *testing.T) {
 			parts = append(parts, fmt.Sprintf(`{"type":"Tag","name":"#tag%02d"}`, i))
 		}
 		got, ok := decodePeerArticle([]byte(peerCreatePayload(testPeerActor,
-			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor)
+			peerArticleObject(`,"attachment":[`+strings.Join(parts, ",")+`]`))), testPeerActor, time.Time{})
 		if !ok {
 			t.Fatal("article dropped for repeated tags, want truncation")
 		}
@@ -972,7 +1103,7 @@ func TestIngestRejectsForeignOriginID(t *testing.T) {
 
 	// Origin comparison is case-insensitive on scheme+host.
 	mixedCase := "https://Peer.Example/ap/actors/catalog"
-	got, ok := decodePeerArticle([]byte(peerCreatePayload(mixedCase, ownArticle)), mixedCase)
+	got, ok := decodePeerArticle([]byte(peerCreatePayload(mixedCase, ownArticle)), mixedCase, time.Time{})
 	if !ok {
 		t.Fatal("case-insensitive origin match was dropped")
 	}
