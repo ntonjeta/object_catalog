@@ -68,6 +68,7 @@ type objectDTO struct {
 	ReservedFrom *time.Time       `json:"reserved_from"`
 	Category     *categoryDTO     `json:"category"`
 	Tags         []string         `json:"tags"`
+	Source       string           `json:"source"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
