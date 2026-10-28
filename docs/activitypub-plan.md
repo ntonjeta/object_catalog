@@ -1,8 +1,9 @@
 # ActivityPub Federation Plan
 
-Status: PR 1–3 done, PR 4 deferred (to be tackled later)  
+Status: PR 1–3 and PR 5 done, PR 4 deferred (to be tackled later)  
 Decision records: [ADR-0002: ActivityPub federation with peer instances](adr/0002-federation.md),
-[ADR-0003: Federation adapter split](adr/0003-federation-adapter-split.md)  
+[ADR-0003: Federation adapter split](adr/0003-federation-adapter-split.md),
+[ADR-0004: Peer join and mirrored catalog](adr/0004-peer-join-and-mirror.md)  
 User guide: [docs/users/federation.md](users/federation.md)
 
 ## Goal
@@ -82,17 +83,53 @@ Implementation notes for when PR 4 is picked up:
   `Reserve` targets and rate-limit pending reservations per remote actor to
   avoid queue spam.
 
+### PR 5 — Peer join, mirroring and admin panel (done)
+
+- `peers` and `remote_objects` SQLite tables with their repositories;
+  `AddPeer` resolves a handle (`catalog@host`) or actor URL (WebFinger for
+  handles), stores the peer as `pending` and queues a `follow` outbox entry.
+  The peer's `Accept` for that follow activity moves it to `accepted`;
+  joining again refreshes the follow and resets the state to `pending`.
+- `Follow`/`Undo` ride the existing outbox and `Deliverer`: they are posted
+  to the target peer's inbox only (never to the follower fan-out) and use
+  the same backoff as object announcements.
+- `ProcessPendingInbox` handles `Accept`, and for peers in state `accepted`
+  mirrors `Create`/`Update`/`Delete` into `remote_objects`. Ingest is gated
+  on the peers table, so a signed-but-unknown actor — or one that merely
+  follows this instance — cannot inject content. Article ids from a foreign
+  origin are dropped, and a delete for an id that was never mirrored is
+  dropped instead of retried.
+- `GET /api/objects` reads local objects and mirrored peer objects from one
+  SQL `UNION ALL` query; every row carries a `source` marker (the peer
+  actor id for mirrored rows).
+- Admin API: `GET /api/admin/federation` (overview: actor, peers,
+  followers, outbox), `POST /api/admin/federation/peers`, `DELETE
+  /api/admin/federation/peers/{id}`.
+- Admin UI: a federation panel (this instance's handle, join form, peers
+  with their state, followers, outbox with delivery state) and a
+  `via <host>` badge on peer cards, whose name links to the peer's
+  canonical article URL.
+- Decision record: [ADR-0004](adr/0004-peer-join-and-mirror.md).
+
 ## Testing
 
 Implemented:
 
 - Unit tests: `Identity` (key generation/persistence/reuse), `Federation`
   (follow, undo, enqueue validation, dedup, processing, backoff), ActivityPub
-  serialization, SQLite repos (outbox, followers, inbox events, key cache).
+  serialization, SQLite repos (outbox, followers, inbox events, key cache,
+  peers, remote objects).
+- Peer unit tests: actor resolution by handle and URL, join and leave, the
+  `pending` → `accepted` handshake, and article ingest (defensive parsing,
+  foreign-origin ids, unknown-id deletes, upsert idempotence).
 - E2E (`e2e/activitypub_test.go`): WebFinger, actor document, outbox
   announcements, signed follow → accept → delivery round-trip between two
   in-process instances, unsigned/tampered/mismatched-signer rejection,
   activity-id dedup.
+- E2E (`e2e/federation_peers_test.go`, `e2e/federation_admin_test.go`): the
+  two-instance handshake, mirrored announcements appearing in the public
+  list, the join gate that keeps unjoined actors out, the admin overview
+  and join/remove endpoints.
 - All four AGENTS.md verification commands pass as of this stopping point.
 
 Outstanding (PR 4):
@@ -103,7 +140,10 @@ Outstanding (PR 4):
 
 ## Current state at this stop
 
-- PR 1–3 complete and race-tested; changes uncommitted in the
-  `activityPub` worktree (`feat(federation)` commits pending).
+- PR 1–3 and PR 5 complete and race-tested, committed on the `activityPub`
+  branch.
+- PR 4 (remote reservations) stays deferred; the implementation notes above
+  still apply.
 - Known staged risk: inbox processing trusts the verified signer/actor pair;
-  no rate limiting yet (see PR 4 notes).
+  no rate limiting yet (see PR 4 notes). Peer ingest adds a second gate —
+  only joined, accepted peers may write into the catalog.

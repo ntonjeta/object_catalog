@@ -141,12 +141,14 @@ uncategorized.
 
 - `q` — case-insensitive match against object name, description, category name,
   and tags.
-- `category` — exact category name, case-insensitive.
+- `category` — exact category name, case-insensitive. It applies to local
+  objects only; mirrored peer objects carry a free-form category name.
 - `tag` — exact normalized tag.
 - `limit` — default 20, maximum 100.
 - `offset` — non-negative.
 
-Results are ordered newest first.
+Results are ordered newest first. The list contains the local catalog and the
+objects mirrored from joined peers.
 
 ### Frontend
 
@@ -165,7 +167,12 @@ The embedded frontend provides:
 - administrator busy marking/release and future reservations, with an availability badge for public
   readers;
 - object import from `.xlsx` or CSV with a per-row result summary;
-- category create/rename/delete.
+- category create/rename/delete;
+- an administrator federation panel: this instance's handle, a join form for
+  peer instances, the joined peers with their state, the followers, and the
+  outbox with delivery state;
+- peer objects in the public list, marked with a `via <host>` badge and
+  linking to the peer's canonical article URL.
 
 There is no frontend build step and no external CDN dependency.
 
@@ -175,7 +182,8 @@ The instance federates as a single ActivityStreams `Service` actor (handle
 `catalog`, `domain.InstanceActorHandle`). Catalog objects are not actors. See
 the [user guide](users/federation.md), the decision records
 [ADR-0002](adr/0002-federation.md) /
-[ADR-0003](adr/0003-federation-adapter-split.md), and the staged plan in
+[ADR-0003](adr/0003-federation-adapter-split.md) /
+[ADR-0004](adr/0004-peer-join-and-mirror.md), and the staged plan in
 [activitypub-plan.md](activitypub-plan.md).
 
 - `BASE_URL` is required and validated at startup; all federated identifiers
@@ -195,8 +203,9 @@ the [user guide](users/federation.md), the decision records
   failure rotation retry). The signer must equal the activity `actor`.
   Verified activities are deduplicated by id and queued in `inbox_events`
   for asynchronous processing: `Follow`/`Undo` targeting the instance actor
-  update the follower list (`Follow` also queues the `Accept`); unknown
-  types and foreign targets are dropped after processing. Verification
+  update the follower list (`Follow` also queues the `Accept`); `Accept`
+  and peer `Create`/`Update`/`Delete` are handled as described below;
+  unknown types and foreign targets are dropped after processing. Verification
   failure returns `unauthorized`, unparseable bodies `invalid_input`,
   anything acknowledged returns `202` with an empty body.
 - `GET /ap/outbox` serves an `OrderedCollection` of published activities
@@ -211,7 +220,41 @@ the [user guide](users/federation.md), the decision records
   (`app.Config.FederationPoll` in tests), POSTs them HTTP-signatured
   (rsa-sha256, `(request-target) host date digest`, key `#main-key`) to every
   follower inbox with exponential backoff (30 s base, 30 min cap).
-- Federation endpoints are public reads; no session is required.
+- The `/ap/` federation endpoints are public reads; no session is required.
+  The admin federation endpoints under `/api/admin/federation` require an
+  authenticated session.
+
+### Federation peers
+
+The administrator can join another instance from the admin panel, by handle
+(`catalog@host`) or by actor URL.
+
+- The target is resolved synchronously before anything is stored: WebFinger
+  for a handle, a direct actor fetch for a URL. A peer that cannot be
+  resolved is not stored at all — junk syntax and a self-follow are
+  `invalid_input` (400), an unreachable or unknown peer is `not_found` (404).
+- A joined peer is stored as `pending` with the id of its follow activity
+  (`<BASE_URL>/ap/outbox/<peer-id>`). The peer's `Accept` for exactly that
+  activity moves the peer to `accepted`. Joining again refreshes the follow
+  activity and resets the state to `pending`.
+- Outbound `Follow`/`Undo` are outbox entries delivered by the same
+  deliverer as object announcements, with the same backoff. They address the
+  target peer's inbox only and are never fanned out to followers.
+- `Create`/`Update`/`Delete` from a peer in state `accepted` are ingested
+  into the `remote_objects` table as read-only mirrors. Activities from any
+  other actor — signed but unknown, or a follower that was never joined — are
+  dropped after processing.
+- A peer article id must be an absolute http(s) URL on the announcing peer's
+  own origin; foreign-origin ids are dropped. A `Delete` must name an id on
+  the announcing peer's origin (one peer cannot tombstone another peer's
+  mirrors), and a delete for an id that was never mirrored is dropped rather
+  than retried.
+- The public list merges both catalogs: `GET /api/objects` reads local
+  objects and mirrored peer objects from one SQL `UNION ALL` query. Every
+  object response carries `source` (empty for local rows, the peer actor id
+  for mirrored ones). `GET /api/objects/{id}` stays local-only.
+- Leaving a peer queues an `Undo` and deletes the objects mirrored from that
+  peer.
 
 ## Code structure
 
@@ -255,6 +298,13 @@ e2e/                    end-to-end HTTP tests
   bookkeeping (`delivered_at`, `attempts`, `next_attempt_at`) and the object
   snapshot at activity time.
 - `followers` — remote actor ids and their inbox URLs.
+- `peers` — joined peer instances: actor id, inbox URL, the follow activity
+  id their `Accept` must answer, state (`pending`/`accepted`), creation time.
+- `remote_objects` — objects mirrored from joined peers: the peer's article
+  id, peer actor id, name, description, image URL, busy state, category
+  name, publication and update times.
+- `remote_object_tags` — composite primary key `(object_id, tag)` over
+  mirrored objects.
 - `inbox_events` — verified incoming activities deduplicated by activity id;
   processed asynchronously with the same retry bookkeeping as `outbox`.
 - `remote_keys` — cached remote public keys by signature key id.
@@ -298,6 +348,9 @@ Constraints:
 | `PATCH` | `/api/objects/{id}/images/order` | admin |
 | `DELETE` | `/api/objects/{id}/images/{imageId}` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
+| `GET` | `/api/admin/federation` | admin |
+| `POST` | `/api/admin/federation/peers` | admin |
+| `DELETE` | `/api/admin/federation/peers/{id}` | admin |
 | `GET` | `/.well-known/webfinger` | public |
 | `GET` | `/ap/actors/{handle}` | public |
 | `POST` | `/ap/inbox` | public (signature-verified) |
@@ -324,11 +377,21 @@ Reservations use `PATCH /api/objects/{id}/reservation` with
 future and `until` must be after `from`; reserving a currently busy object
 fails with `conflict`.
 
+`GET /api/admin/federation` returns the whole federation overview in one
+response: `actor` (`id`, `handle`), `peers` (`id`, `actor_id`, `state`,
+`created_at`), `followers` (`actor_id`, `created_at`), `outbox` (the 50
+newest entries: `id`, `kind`, `target`, `published_at`, `delivered_at`,
+`attempts`, `next_attempt_at`) and `outbox_total`. `POST
+/api/admin/federation/peers` takes `{"target":"catalog@host"}` and answers
+`201` with the stored peer; `DELETE /api/admin/federation/peers/{id}`
+answers `204`, or `404` for an unknown peer.
+
 Successful object responses include `image_path` (empty when absent), `images`
 (the ordered list as `{"id", "url", "position"}` entries, `[]` when the object
 has none; the first uploaded image is mirrored in `image_path`), `busy`
-(the effective state at read time), `busy_until`, and `reserved_from` (null
-when the object carries no reservation). A create or update that stores its
+(the effective state at read time), `busy_until`, `reserved_from` (null
+when the object carries no reservation), and `source` (empty for local
+objects, the peer actor id for mirrored ones). A create or update that stores its
 cover reports that cover in `image_path` immediately, but its `images` list is
 authoritative only on subsequent reads: the response of `POST /api/objects` and
 of `PATCH /api/objects/{id}` may carry `images: []` even though the stored file
@@ -386,6 +449,10 @@ marking/release/expiry, reservations, CSV/XLSX
 - Third-party services are not used; none need mocks.
 - Federation discovery (WebFinger matching, actor document, signing-key
   persistence and reuse) is covered by use-case unit tests and E2E tests.
+- Federation peers are covered by use-case and E2E tests: join and leave,
+  the `pending` → `accepted` handshake, mirrored announcements showing up in
+  the public list, and the join gate that keeps content from actors that
+  were never joined.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test
   verifies login, category CRUD, photo upload, thumbnails, search, edit/remove,
   delete, and logout.
