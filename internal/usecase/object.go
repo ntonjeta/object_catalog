@@ -135,6 +135,7 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 		return domain.Object{}, err
 	}
 	oldImagePath := object.ImagePath
+	oldImages := object.Images
 	if input.Name != nil {
 		name := domain.NormalizeObjectName(*input.Name)
 		if err := domain.ValidateObjectName(name); err != nil {
@@ -174,18 +175,187 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	if err != nil {
 		return domain.Object{}, err
 	}
+	images := oldImages
 	if newImagePath != "" {
 		object.ImagePath = newImagePath
+		if len(images) > 0 {
+			// The cover is row 0 of the list: overwrite that row in place,
+			// keeping its id so existing API addresses stay valid. When the
+			// list is empty the upload stays a pure image_path swap; no row
+			// is invented.
+			replaced := append([]domain.ObjectImage{}, images...)
+			replaced[0].FileName = newImagePath
+			images = replaced
+		}
 	} else if input.RemovePhoto {
 		object.ImagePath = ""
+		images = nil
 	}
+	object.Images = images
 	object.UpdatedAt = time.Now().UTC()
 	if err := uc.objects.Update(ctx, object); err != nil {
 		uc.deletePhoto(ctx, newImagePath)
 		return domain.Object{}, err
 	}
-	if oldImagePath != object.ImagePath {
-		uc.deletePhoto(ctx, oldImagePath)
+	if !imageListsEqual(oldImages, images) {
+		if err := uc.objects.ReplaceImages(ctx, object.ID, images); err != nil {
+			// The cover row is already committed, so every file this call
+			// could delete is still referenced by the committed cover or the
+			// surviving old list. Touch nothing and let the caller retry.
+			return domain.Object{}, err
+		}
+	}
+	for _, fileName := range removedImageFiles(oldImagePath, oldImages, object.ImagePath, images) {
+		uc.deletePhoto(ctx, fileName)
+	}
+	uc.attachReservation(ctx, &object, time.Now().UTC())
+	return object, nil
+}
+
+// AddImages appends uploaded photos to the object's ordered image list. The
+// prospective count is validated before any file is saved, and every newly
+// saved file is discarded when a repository write fails, mirroring the Create
+// rollback. Appending never displaces row 0, so the cover only changes when
+// the list was empty and the first uploaded file takes over a URL cover or an
+// empty image_path.
+func (uc *Objects) AddImages(ctx context.Context, objectID string, uploads []PhotoUpload) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, objectID)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	if err := domain.ValidateObjectImageCount(len(object.Images) + len(uploads)); err != nil {
+		return domain.Object{}, err
+	}
+	oldImagePath := object.ImagePath
+	oldImages := object.Images
+	images := append([]domain.ObjectImage{}, oldImages...)
+	saved := make([]string, 0, len(uploads))
+	discardSaved := func() {
+		for _, fileName := range saved {
+			uc.deletePhoto(ctx, fileName)
+		}
+	}
+	for i := range uploads {
+		fileName, err := uc.savePhoto(ctx, &uploads[i])
+		if err != nil {
+			discardSaved()
+			return domain.Object{}, err
+		}
+		saved = append(saved, fileName)
+		imageID, err := domain.NewID()
+		if err != nil {
+			discardSaved()
+			return domain.Object{}, fmt.Errorf("generate object image id: %w", err)
+		}
+		images = append(images, domain.ObjectImage{ID: imageID, FileName: fileName})
+	}
+	if err := uc.objects.ReplaceImages(ctx, objectID, images); err != nil {
+		discardSaved()
+		return domain.Object{}, err
+	}
+	object.Images = images
+	if len(oldImages) == 0 && len(images) > 0 && images[0].FileName != oldImagePath {
+		object.ImagePath = images[0].FileName
+		object.UpdatedAt = time.Now().UTC()
+		if err := uc.objects.Update(ctx, object); err != nil {
+			// The list is committed and references the new files, so they
+			// cannot be discarded here; the cover resyncs on retry.
+			return domain.Object{}, err
+		}
+		for _, fileName := range removedImageFiles(oldImagePath, oldImages, object.ImagePath, images) {
+			uc.deletePhoto(ctx, fileName)
+		}
+	}
+	uc.attachReservation(ctx, &object, time.Now().UTC())
+	return object, nil
+}
+
+// RemoveImage drops one image from the object's list and renumbers the
+// remaining positions. When the removed row was the cover, image_path follows
+// the new row 0 (or clears). Displaced files are deleted only after every
+// repository write succeeded, matching Update's oldImagePath discipline.
+func (uc *Objects) RemoveImage(ctx context.Context, objectID, imageID string) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, objectID)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	index := -1
+	for i, image := range object.Images {
+		if image.ID == imageID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return domain.Object{}, fmt.Errorf("%w: object %s has no image %s", domain.ErrNotFound, objectID, imageID)
+	}
+	oldImagePath := object.ImagePath
+	oldImages := object.Images
+	rest := make([]domain.ObjectImage, 0, len(oldImages)-1)
+	rest = append(rest, oldImages[:index]...)
+	rest = append(rest, oldImages[index+1:]...)
+	if err := uc.objects.ReplaceImages(ctx, objectID, rest); err != nil {
+		return domain.Object{}, err
+	}
+	if index == 0 {
+		if len(rest) > 0 {
+			object.ImagePath = rest[0].FileName
+		} else {
+			object.ImagePath = ""
+		}
+		object.UpdatedAt = time.Now().UTC()
+		if err := uc.objects.Update(ctx, object); err != nil {
+			// The new list is committed; the displaced cover may still be
+			// referenced by the stale cover row, so nothing is deleted.
+			return domain.Object{}, err
+		}
+	}
+	object.Images = rest
+	for _, fileName := range removedImageFiles(oldImagePath, oldImages, object.ImagePath, rest) {
+		uc.deletePhoto(ctx, fileName)
+	}
+	uc.attachReservation(ctx, &object, time.Now().UTC())
+	return object, nil
+}
+
+// ReorderImages rewrites the image list with the submitted id order. The ids
+// must be a permutation of the current list; no files are deleted because
+// every file stays referenced. The cover follows the new row 0.
+func (uc *Objects) ReorderImages(ctx context.Context, objectID string, orderedIDs []string) (domain.Object, error) {
+	object, err := uc.objects.ByID(ctx, objectID)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	if len(orderedIDs) != len(object.Images) {
+		return domain.Object{}, fmt.Errorf("%w: image ids must be a permutation of the object's images", domain.ErrInvalid)
+	}
+	byID := make(map[string]domain.ObjectImage, len(object.Images))
+	for _, image := range object.Images {
+		byID[image.ID] = image
+	}
+	ordered := make([]domain.ObjectImage, 0, len(orderedIDs))
+	seen := make(map[string]struct{}, len(orderedIDs))
+	for _, imageID := range orderedIDs {
+		image, ok := byID[imageID]
+		if !ok {
+			return domain.Object{}, fmt.Errorf("%w: unknown image id %s", domain.ErrInvalid, imageID)
+		}
+		if _, duplicate := seen[imageID]; duplicate {
+			return domain.Object{}, fmt.Errorf("%w: duplicate image id %s", domain.ErrInvalid, imageID)
+		}
+		seen[imageID] = struct{}{}
+		ordered = append(ordered, image)
+	}
+	if err := uc.objects.ReplaceImages(ctx, objectID, ordered); err != nil {
+		return domain.Object{}, err
+	}
+	object.Images = ordered
+	if len(ordered) > 0 && ordered[0].FileName != object.ImagePath {
+		object.ImagePath = ordered[0].FileName
+		object.UpdatedAt = time.Now().UTC()
+		if err := uc.objects.Update(ctx, object); err != nil {
+			return domain.Object{}, err
+		}
 	}
 	uc.attachReservation(ctx, &object, time.Now().UTC())
 	return object, nil
@@ -385,10 +555,17 @@ func (uc *Objects) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// The object_images rows vanish with the object (FK cascade); the use
+	// case owns only the best-effort file cleanup.
 	if err := uc.objects.Delete(ctx, id); err != nil {
 		return err
 	}
 	uc.deletePhoto(ctx, object.ImagePath)
+	for _, image := range object.Images {
+		if image.FileName != object.ImagePath {
+			uc.deletePhoto(ctx, image.FileName)
+		}
+	}
 	return nil
 }
 
@@ -472,6 +649,54 @@ func (uc *Objects) deletePhoto(ctx context.Context, path string) {
 		return
 	}
 	_ = uc.photos.Delete(ctx, path)
+}
+
+// imageListsEqual compares image lists by id and file name.
+func imageListsEqual(a, b []domain.ObjectImage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// removedImageFiles lists the files referenced by the old cover and image
+// list that the new cover and image list no longer reference, deduplicated in
+// old-first order. Callers run it only after every repository write has
+// succeeded, so a file still referenced by the surviving state is never
+// deleted and a failed write never orphans a saved file.
+func removedImageFiles(oldImagePath string, oldImages []domain.ObjectImage, newPath string, newImages []domain.ObjectImage) []string {
+	surviving := make(map[string]struct{}, len(newImages)+1)
+	if newPath != "" {
+		surviving[newPath] = struct{}{}
+	}
+	for _, image := range newImages {
+		surviving[image.FileName] = struct{}{}
+	}
+	removed := make([]string, 0, len(oldImages)+1)
+	seen := make(map[string]struct{}, len(oldImages)+1)
+	claim := func(fileName string) {
+		if fileName == "" {
+			return
+		}
+		if _, ok := surviving[fileName]; ok {
+			return
+		}
+		if _, duplicate := seen[fileName]; duplicate {
+			return
+		}
+		seen[fileName] = struct{}{}
+		removed = append(removed, fileName)
+	}
+	claim(oldImagePath)
+	for _, image := range oldImages {
+		claim(image.FileName)
+	}
+	return removed
 }
 
 func normalizeBusy(object *domain.Object, now time.Time) {
