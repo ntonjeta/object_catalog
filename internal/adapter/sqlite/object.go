@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"biblio-oggetto/internal/domain"
 	"biblio-oggetto/internal/usecase"
@@ -36,6 +37,18 @@ func (r *ObjectRepo) Create(ctx context.Context, object domain.Object) error {
 		return mapError(err)
 	}
 	if err := replaceTags(ctx, tx, object.ID, object.Tags); err != nil {
+		return err
+	}
+	images := object.Images
+	if len(images) == 0 && isBareFileName(object.ImagePath) {
+		// A cover stored as an uploaded file name seeds row 0 in the same tx.
+		id, err := domain.NewID()
+		if err != nil {
+			return fmt.Errorf("generate object image id: %w", err)
+		}
+		images = []domain.ObjectImage{{ID: id, FileName: object.ImagePath}}
+	}
+	if err := replaceImages(ctx, tx, object.ID, images); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -102,6 +115,11 @@ func (r *ObjectRepo) ByID(ctx context.Context, id string) (domain.Object, error)
 		return domain.Object{}, err
 	}
 	object.Tags = tags
+	images, err := r.Images(ctx, object.ID)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	object.Images = images
 	return object, nil
 }
 
@@ -178,14 +196,20 @@ func (r *ObjectRepo) List(ctx context.Context, filter usecase.ObjectFilter) ([]d
 		return nil, 0, mapError(err)
 	}
 
-	// Tags are loaded per object; the public catalog is small enough that this
-	// keeps the query simple. A batched loader can replace it if needed.
+	// Tags and images are loaded per object; the public catalog is small
+	// enough that this keeps the query simple. A batched loader can replace it
+	// if needed.
 	for i := range objects {
 		tags, err := r.tags(ctx, objects[i].ID)
 		if err != nil {
 			return nil, 0, err
 		}
 		objects[i].Tags = tags
+		images, err := r.Images(ctx, objects[i].ID)
+		if err != nil {
+			return nil, 0, err
+		}
+		objects[i].Images = images
 	}
 	return objects, total, nil
 }
@@ -211,6 +235,69 @@ func (r *ObjectRepo) tags(ctx context.Context, objectID string) ([]string, error
 		return nil, mapError(err)
 	}
 	return tags, nil
+}
+
+func (r *ObjectRepo) Images(ctx context.Context, objectID string) ([]domain.ObjectImage, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, file_name FROM object_images WHERE object_id = ? ORDER BY position`, objectID,
+	)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	images := make([]domain.ObjectImage, 0)
+	for rows.Next() {
+		var image domain.ObjectImage
+		if err := rows.Scan(&image.ID, &image.FileName); err != nil {
+			return nil, mapError(err)
+		}
+		images = append(images, image)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapError(err)
+	}
+	return images, nil
+}
+
+// ReplaceImages rewrites the whole image list for one object: positions are
+// renumbered from zero in slice order, inside a single transaction.
+func (r *ObjectRepo) ReplaceImages(ctx context.Context, objectID string, images []domain.ObjectImage) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin object images replacement: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := replaceImages(ctx, tx, objectID, images); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit object images replacement: %w", err)
+	}
+	return nil
+}
+
+func replaceImages(ctx context.Context, tx *sql.Tx, objectID string, images []domain.ObjectImage) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM object_images WHERE object_id = ?`, objectID); err != nil {
+		return mapError(err)
+	}
+	createdAt := formatTime(time.Now().UTC())
+	for position, image := range images {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO object_images (id, object_id, position, file_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+			image.ID, objectID, position, image.FileName, createdAt,
+		); err != nil {
+			return mapError(err)
+		}
+	}
+	return nil
+}
+
+// isBareFileName reports whether an image_path refers to a stored upload
+// rather than a remote URL or a root-relative public path.
+func isBareFileName(imagePath string) bool {
+	return imagePath != "" && !strings.HasPrefix(imagePath, "/") && !strings.Contains(imagePath, "://")
 }
 
 func replaceTags(ctx context.Context, tx *sql.Tx, objectID string, tags []string) error {
@@ -315,5 +402,6 @@ func scanObject(row scanner) (domain.Object, error) {
 		object.Category = category
 	}
 	object.Tags = []string{}
+	object.Images = []domain.ObjectImage{}
 	return object, nil
 }

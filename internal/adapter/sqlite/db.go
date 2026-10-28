@@ -45,7 +45,29 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate database: %w", err)
 		}
 	}
-	return ensureObjectColumns(ctx, db)
+	if err := ensureObjectColumns(ctx, db); err != nil {
+		return err
+	}
+	return backfillObjectImages(ctx, db)
+}
+
+// backfillObjectImages seeds one position-0 image row per legacy object whose
+// cover is an uploaded file name. Remote URLs and root-relative paths stay out
+// of the list (imported covers never join it). INSERT OR IGNORE plus the NOT
+// EXISTS guard make the statement rerunnable on every Open.
+func backfillObjectImages(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO object_images (id, object_id, position, file_name, created_at)
+			SELECT lower(hex(randomblob(16))), o.id, 0, o.image_path, o.updated_at
+			FROM objects o
+			WHERE o.image_path <> ''
+				AND o.image_path NOT LIKE '%://%'
+				AND o.image_path NOT LIKE '/%'
+				AND NOT EXISTS (SELECT 1 FROM object_images oi WHERE oi.object_id = o.id)`)
+	if err != nil {
+		return fmt.Errorf("backfill object images: %w", err)
+	}
+	return nil
 }
 
 func ensureObjectColumns(ctx context.Context, db *sql.DB) error {
