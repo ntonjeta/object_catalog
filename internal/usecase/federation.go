@@ -270,7 +270,7 @@ func (f *Federation) AddPeer(ctx context.Context, target string) (domain.Peer, e
 	}
 	remote, err := f.actors.Resolve(ctx, target)
 	if err != nil {
-		if errors.Is(err, domain.ErrInvalid) {
+		if errors.Is(err, domain.ErrInvalid) && !errors.Is(err, domain.ErrRemoteActor) {
 			return domain.Peer{}, err
 		}
 		return domain.Peer{}, fmt.Errorf("%w: could not resolve peer %q", domain.ErrNotFound, target)

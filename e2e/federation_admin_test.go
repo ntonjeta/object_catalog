@@ -1,7 +1,9 @@
 package e2e
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -81,6 +83,56 @@ func TestAdminFederationOverview(t *testing.T) {
 	// The panel renders arrays directly; null would break it.
 	if !strings.Contains(string(body), `"peers":[]`) || !strings.Contains(string(body), `"followers":[]`) || !strings.Contains(string(body), `"outbox":[]`) {
 		t.Fatalf("overview body = %s, want empty JSON arrays", string(body))
+	}
+}
+
+func TestAdminPeerJoinInvalidRemoteActorIsNotFound(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		document func(actorID string) map[string]any
+	}{
+		{
+			name: "missing inbox",
+			document: func(actorID string) map[string]any {
+				return map[string]any{"id": actorID, "type": "Service"}
+			},
+		},
+		{
+			name: "non-http inbox",
+			document: func(actorID string) map[string]any {
+				return map[string]any{"id": actorID, "type": "Service", "inbox": "ftp://peer.example/inbox"}
+			},
+		},
+		{
+			name: "actor id mismatch",
+			document: func(actorID string) map[string]any {
+				return map[string]any{"id": actorID + "/other", "type": "Service", "inbox": actorID + "/inbox"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var actorID string
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/activity+json")
+				_ = json.NewEncoder(w).Encode(tc.document(actorID))
+			}))
+			defer remote.Close()
+			actorID = remote.URL + "/ap/actors/catalog"
+			e := newEnv(t)
+			e.login()
+
+			response, body := e.do(e.admin, http.MethodPost, "/api/admin/federation/peers",
+				map[string]string{"target": actorID})
+			assertStatus(t, response, http.StatusNotFound, body)
+			assertErrorCode(t, body, "not_found")
+
+			response, body = e.do(e.admin, http.MethodGet, "/api/admin/federation", nil)
+			assertStatus(t, response, http.StatusOK, body)
+			overview := decodeOverview(t, body)
+			if len(overview.Peers) != 0 || overview.OutboxTotal != 0 {
+				t.Fatalf("invalid remote actor stored peers %+v / outbox total %d, want nothing", overview.Peers, overview.OutboxTotal)
+			}
+		})
 	}
 }
 

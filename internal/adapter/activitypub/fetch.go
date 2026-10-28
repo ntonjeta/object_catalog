@@ -38,10 +38,10 @@ func (r *RemoteActors) FetchActor(ctx context.Context, actorID string) (domain.R
 		return domain.RemoteActor{}, fmt.Errorf("decode actor %q: %w", actorID, err)
 	}
 	if !strings.EqualFold(document.ID, actorID) {
-		return domain.RemoteActor{}, fmt.Errorf("actor document id %q does not match requested %q", document.ID, actorID)
+		return domain.RemoteActor{}, fmt.Errorf("%w: actor document id %q does not match requested %q", domain.ErrRemoteActor, document.ID, actorID)
 	}
 	if err := validateAbsoluteHTTPURL(document.Inbox); err != nil {
-		return domain.RemoteActor{}, fmt.Errorf("actor %q: %w", actorID, err)
+		return domain.RemoteActor{}, fmt.Errorf("%w: actor %q: %v", domain.ErrRemoteActor, actorID, err)
 	}
 	return domain.RemoteActor{ID: document.ID, InboxURL: document.Inbox}, nil
 }

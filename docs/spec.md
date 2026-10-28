@@ -232,7 +232,8 @@ The administrator can join another instance from the admin panel, by handle
 - The target is resolved synchronously before anything is stored: WebFinger
   for a handle, a direct actor fetch for a URL. A peer that cannot be
   resolved is not stored at all — junk syntax and a self-follow are
-  `invalid_input` (400), an unreachable or unknown peer is `not_found` (404).
+  `invalid_input` (400). An unreachable or unknown peer, or an actor document
+  with a mismatched id or missing/invalid inbox, is `not_found` (404).
 - A joined peer is stored as `pending` with the id of its follow activity
   (`<BASE_URL>/ap/outbox/<outbox-entry-id>`, the queued follow entry). The
   peer's `Accept` for exactly that activity moves the peer to `accepted`.
