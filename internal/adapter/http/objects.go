@@ -38,10 +38,20 @@ type reserveRequest struct {
 	Until *time.Time `json:"until"`
 }
 
+type reorderImagesRequest struct {
+	ImageIDs []string `json:"image_ids"`
+}
+
 type reservationResponse struct {
 	From   time.Time  `json:"from"`
 	Until  *time.Time `json:"until"`
 	Status string     `json:"status"`
+}
+
+type imageResponse struct {
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	Position int    `json:"position"`
 }
 
 type objectResponse struct {
@@ -49,6 +59,7 @@ type objectResponse struct {
 	Name         string               `json:"name"`
 	Description  string               `json:"description"`
 	ImagePath    string               `json:"image_path"`
+	Images       []imageResponse      `json:"images"`
 	Busy         bool                 `json:"busy"`
 	BusyUntil    *time.Time           `json:"busy_until"`
 	ReservedFrom *time.Time           `json:"reserved_from"`
@@ -211,6 +222,43 @@ func (s *Server) reserveObject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
 }
 
+func (s *Server) addObjectImages(w http.ResponseWriter, r *http.Request) {
+	uploads, cleanup, err := parseAddImagesMultipart(w, r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer cleanup()
+	object, err := s.objects.AddImages(r.Context(), r.PathValue("id"), uploads)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
+}
+
+func (s *Server) deleteObjectImage(w http.ResponseWriter, r *http.Request) {
+	object, err := s.objects.RemoveImage(r.Context(), r.PathValue("id"), r.PathValue("imageId"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
+}
+
+func (s *Server) reorderObjectImages(w http.ResponseWriter, r *http.Request) {
+	var request reorderImagesRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	object, err := s.objects.ReorderImages(r.Context(), r.PathValue("id"), request.ImageIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, objectEnvelope{Object: toObjectResponse(object)})
+}
+
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	if err := s.objects.Delete(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, err)
@@ -242,6 +290,15 @@ func toObjectResponse(object domain.Object) objectResponse {
 	if response.Tags == nil {
 		response.Tags = []string{}
 	}
+	images := make([]imageResponse, 0, len(object.Images))
+	for position, image := range object.Images {
+		images = append(images, imageResponse{
+			ID:       image.ID,
+			URL:      imageURL(image.FileName),
+			Position: position,
+		})
+	}
+	response.Images = images
 	if object.Category != nil {
 		category := toCategoryResponse(*object.Category)
 		response.Category = &category

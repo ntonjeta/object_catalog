@@ -45,8 +45,12 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 
 	response, data = environment.do(environment.anonymous, http.MethodGet, "/api/objects/"+object.ID, nil)
 	assertStatus(t, response, http.StatusOK, data)
-	if got := decode[objectEnvelope](t, data).Object.ImagePath; got != object.ImagePath {
-		t.Fatalf("public image path = %q, want %q", got, object.ImagePath)
+	public := decode[objectEnvelope](t, data).Object
+	if public.ImagePath != object.ImagePath {
+		t.Fatalf("public image path = %q, want %q", public.ImagePath, object.ImagePath)
+	}
+	if len(public.Images) != 1 || public.Images[0].URL != public.ImagePath || public.Images[0].Position != 0 {
+		t.Fatalf("public single-photo list = %+v, want row 0 seeded from the photo", public.Images)
 	}
 
 	second := testPNG(t, 3, 3, color.RGBA{B: 220, A: 255})
@@ -55,6 +59,9 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 	replaced := decode[objectEnvelope](t, data).Object
 	if replaced.ImagePath == object.ImagePath {
 		t.Fatal("image path was not replaced")
+	}
+	if len(replaced.Images) != 1 || replaced.Images[0].URL != replaced.ImagePath || replaced.Images[0].ID != public.Images[0].ID {
+		t.Fatalf("replaced single-photo list = %+v, want row 0 overwritten with its id kept", replaced.Images)
 	}
 
 	response, data = environment.do(environment.anonymous, http.MethodGet, object.ImagePath, nil)
@@ -69,6 +76,9 @@ func TestObjectPhotoCreateServeReplaceRemove(t *testing.T) {
 	removed := decode[objectEnvelope](t, data).Object
 	if removed.ImagePath != "" {
 		t.Fatalf("image path = %q, want empty", removed.ImagePath)
+	}
+	if len(removed.Images) != 0 {
+		t.Fatalf("removed single-photo list = %+v, want empty", removed.Images)
 	}
 	response, data = environment.do(environment.anonymous, http.MethodGet, replaced.ImagePath, nil)
 	assertStatus(t, response, http.StatusNotFound, data)

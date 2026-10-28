@@ -51,6 +51,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/objects/import", s.requireAuth(s.importObjects))
 	mux.HandleFunc("PATCH /api/objects/{id}", s.requireAuth(s.updateObject))
 	mux.HandleFunc("PATCH /api/objects/{id}/busy", s.requireAuth(s.setObjectBusy))
+	mux.HandleFunc("POST /api/objects/{id}/images", s.requireAuth(s.addObjectImages))
+	mux.HandleFunc("PATCH /api/objects/{id}/images/order", s.requireAuth(s.reorderObjectImages))
+	mux.HandleFunc("DELETE /api/objects/{id}/images/{imageId}", s.requireAuth(s.deleteObjectImage))
 	mux.HandleFunc("PATCH /api/objects/{id}/reservation", s.requireAuth(s.reserveObject))
 	mux.HandleFunc("DELETE /api/objects/{id}", s.requireAuth(s.deleteObject))
 
