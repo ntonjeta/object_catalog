@@ -54,8 +54,9 @@ new data disclosure — it pushes the public view to followers.
 
 The admin panel has a **Federation** section, visible after you log in. It
 shows your own handle, a join form, the peers you follow, your followers,
-and the outbox with delivery state. Use it to link two instances — yours
-and a friend's — so each shows the other's objects.
+and the outbox with delivery state. Use it to follow a friend's instance and
+show its objects in your catalog. Reciprocity requires a join from each
+instance: for your objects to appear in theirs, they must join you too.
 
 Type the peer's handle or actor URL into the join form and press **Join**:
 
@@ -132,9 +133,11 @@ administrator — the announcement should appear in the follower's timeline.
   SQLite file like any other identity secret.
 - **A peer stays `pending`.** The `Follow` is still queued or the peer never
   answered. Look at the outbox table: the `follow` row shows how many
-  attempts were made and when the next retry is due. A peer that was down
-  during the join is retried automatically (30 s to 30 min backoff), and a
-  restart of your server resumes the pending entries.
+  attempts were made and when the next retry is due. If the peer resolved
+  successfully but became unreachable before its `Follow` was delivered,
+  delivery is retried automatically (30 s to 30 min backoff), and a restart
+  of your server resumes the pending entries. A peer that cannot be resolved
+  at join time is not stored or retried; the join fails as described below.
 - **The join fails right away.** The peer could not be looked up — wrong
   handle, no WebFinger record, or an instance that is not reachable at that
   address. Nothing was stored, so you can try again once the peer is up.
