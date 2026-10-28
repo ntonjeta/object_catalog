@@ -42,7 +42,9 @@ Objects have:
 - `id`
 - `name` (required)
 - `description`
-- `image_path` (optional public URL)
+- `image_path` (optional public URL) — the cover; mirrors the first uploaded
+  image when the image list has one
+- `images` (ordered list of uploaded images, at most 10)
 - `busy` flag and optional `busy_until` timestamp
 - optional `reserved_from` timestamp for future reservations
 - optional category
@@ -50,7 +52,9 @@ Objects have:
 - `created_at` and `updated_at`
 
 The administrator can create, update, and delete objects. Updating an object can
-replace or remove its photo. Deleting an object deletes its stored photo.
+replace or remove its photo. The administrator can also add images to an object,
+remove individual images, and reorder them. Deleting an object deletes its
+stored photos.
 
 Only the administrator can mark an object busy (taken). A busy object may have a
 `busy_until` timestamp and becomes available automatically after that time.
@@ -66,6 +70,18 @@ starts). Releasing an object clears the reservation immediately.
 
 - Photos are uploaded with object creation or update using
   `multipart/form-data`.
+- Additional images are appended with `POST /api/objects/{id}/images` using
+  `multipart/form-data`; the repeatable field `images` carries the files. An
+  object holds at most 10 images, each up to 5 MiB.
+- Images are addressed by id: `DELETE /api/objects/{id}/images/{imageId}`
+  removes one image and renumbers the rest;
+  `PATCH /api/objects/{id}/images/order` reorders the list with the complete
+  ordered set of image ids.
+- The first image of the ordered list is the cover: `image_path` is kept in
+  sync with it. Reordering or removing the first image moves the cover to the
+  new first entry; emptying the list clears `image_path`. Setting
+  `remove_photo=true` on an update clears the cover and removes every image in
+  the list.
 - Storage root is `UPLOAD_DIR` (default `./static`); files are written to
   `UPLOAD_DIR/uploads/<random>.<ext>`.
 - Public URL is `/static/uploads/<random>.<ext>`.
@@ -75,7 +91,11 @@ starts). Releasing an object clears the reservation immediately.
 - Filenames are generated with `crypto/rand`; client filenames are never used.
 - Replacing a photo deletes the old file after a successful database update.
 - Creating or updating an object cleans up a newly saved photo when the
-  database operation fails.
+  database operation fails. Multi-image uploads roll back the same way: when
+  the list write fails, every newly saved file is deleted.
+- Deleting an object deletes its cover and every file in its image list.
+- Imported `photo_url` covers stay out of the image list; a remote or
+  root-relative cover is replaced by the first uploaded image.
 - Uploaded files are served with `X-Content-Type-Options: nosniff`; directory
   listings are disabled. SVG and HTML uploads are rejected.
 
@@ -136,6 +156,8 @@ The embedded frontend provides:
 - object thumbnails and photo previews;
 - administrator login and logout;
 - object create/edit/delete with photo upload/replacement/removal;
+- an image strip in the object dialog: add multiple files, remove individual
+  images, and reorder them; card thumbnails keep using the cover;
 - administrator busy marking/release and future reservations, with an availability badge for public
   readers;
 - object import from `.xlsx` or CSV with a per-row result summary;
@@ -175,16 +197,22 @@ e2e/                    end-to-end HTTP tests
 - `objects` — name, description, `image_path`, `busy`, optional `busy_until`,
   optional `reserved_from`, optional category reference.
 - `object_tags` — composite primary key `(object_id, tag)`.
+- `object_images` — ordered images per object: random `id`, `object_id`,
+  `position`, `file_name` (the bare stored file name, never a URL).
 
 Constraints:
 
 - Foreign keys are enforced.
 - Deleting a user cascades sessions.
 - Deleting a category sets `objects.category_id` to null.
-- Deleting an object cascades tags.
+- Deleting an object cascades tags and images.
+- `object_images` enforces `UNIQUE (object_id, position)`.
 - Schema creation is idempotent. Existing databases are migrated by renaming
-  `objects.photo_path` to `objects.image_path`, and by adding
-  `objects.image_path`, `objects.busy`, and `objects.busy_until` when absent.
+  `objects.photo_path` to `objects.image_path`, by adding
+  `objects.image_path`, `objects.busy`, and `objects.busy_until` when absent,
+  and by backfilling one `object_images` row at position 0 for each object
+  whose `image_path` is a bare uploaded file name. URLs and root-relative
+  paths are excluded; the backfill is rerun-safe.
 
 ## HTTP API
 
@@ -207,12 +235,21 @@ Constraints:
 | `PATCH` | `/api/objects/{id}` | admin |
 | `PATCH` | `/api/objects/{id}/busy` | admin |
 | `PATCH` | `/api/objects/{id}/reservation` | admin |
+| `POST` | `/api/objects/{id}/images` | admin |
+| `PATCH` | `/api/objects/{id}/images/order` | admin |
+| `DELETE` | `/api/objects/{id}/images/{imageId}` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
 
 Object create/update accept both JSON and `multipart/form-data`. Multipart
 fields are `name`, `description`, `category_id`, `tags` (comma-separated), and
 `photo`; updates additionally accept `remove_photo=true`. JSON updates accept
-`remove_photo` as a boolean but cannot upload a photo.
+`remove_photo` as a boolean but cannot upload a photo. Extra images upload
+through `POST /api/objects/{id}/images` with `multipart/form-data`, repeating
+the field `images` per file (at most 10 images per object, 5 MiB each).
+Reordering sends `PATCH /api/objects/{id}/images/order` with
+`{"image_ids":["<id>", …]}` — every current image id exactly once, in the
+desired order. Over-cap uploads and invalid permutations fail with
+`invalid_input`; unknown object or image ids fail with `not_found`.
 
 Busy state is changed with `PATCH /api/objects/{id}/busy`. To mark an object
 taken, send `{"busy":true,"busy_until":"<RFC3339 timestamp>"}`; `busy_until` is
@@ -222,10 +259,16 @@ Reservations use `PATCH /api/objects/{id}/reservation` with
 future and `until` must be after `from`; reserving a currently busy object
 fails with `conflict`.
 
-Successful object responses include `image_path` (empty when absent), `busy`
+Successful object responses include `image_path` (empty when absent), `images`
+(the ordered list as `{"id", "url", "position"}` entries, `[]` when the object
+has none; the first uploaded image is mirrored in `image_path`), `busy`
 (the effective state at read time), `busy_until`, and `reserved_from` (null
-when the object carries no reservation). The import endpoint returns per-row
-outcomes:
+when the object carries no reservation). A create or update that stores its
+cover reports that cover in `image_path` immediately, but its `images` list is
+authoritative only on subsequent reads: the response of `POST /api/objects` and
+of `PATCH /api/objects/{id}` may carry `images: []` even though the stored file
+is already row 0, so clients refresh the list from `GET`. The import endpoint
+returns per-row outcomes:
 
 ```json
 {
@@ -270,7 +313,9 @@ go run ./cmd/server
   SQLite database, and a temporary upload directory.
 - Every endpoint is covered, including validation, duplicate/conflict cases,
   unauthorized writes, missing records, pagination, search combinations, photo
-upload/serve/replace/remove/delete, busy marking/release/expiry, reservations, CSV/XLSX
+upload/serve/replace/remove/delete, multi-image upload/serve/reorder/remove
+  with the per-object cap and cascade file cleanup on object delete, busy
+marking/release/expiry, reservations, CSV/XLSX
   import, partial import failures, and legacy schema migration.
 - Third-party services are not used; none need mocks.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test
