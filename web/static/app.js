@@ -89,6 +89,14 @@ busyDialog: document.getElementById("busy-dialog"),
     detailTags: document.getElementById("detail-tags"),
     detailDates: document.getElementById("detail-dates"),
     detailEdit: document.getElementById("detail-edit"),
+    federationRefresh: document.getElementById("federation-refresh"),
+    federationActor: document.getElementById("federation-actor"),
+    peerForm: document.getElementById("peer-form"),
+    peerTarget: document.getElementById("peer-target"),
+    peerError: document.getElementById("peer-error"),
+    peersList: document.getElementById("peers-list"),
+    followersList: document.getElementById("followers-list"),
+    outboxList: document.getElementById("outbox-list"),
   };
 
   const state = {
@@ -110,6 +118,7 @@ busyDialog: document.getElementById("busy-dialog"),
     detailImages: [],
     detailIndex: 0,
     detailRequestId: 0,
+    federation: null,
   };
 
   let statusTimer;
@@ -544,10 +553,24 @@ busyDialog: document.getElementById("busy-dialog"),
       card.setAttribute("role", "button");
       card.setAttribute("aria-label", `View details for ${object.name}`);
 
+      const remote = Boolean(object.source);
       const top = el("div", "card-top");
-      top.append(el("h3", "", object.name));
+      if (remote) {
+        const title = el("h3");
+        const link = el("a", "source-link", object.name);
+        link.href = object.id;
+        link.target = "_blank";
+        link.rel = "noopener";
+        title.append(link);
+        top.append(title);
+      } else {
+        top.append(el("h3", "", object.name));
+      }
       if (object.category) {
         top.append(el("span", "category-badge", object.category.name));
+      }
+      if (remote) {
+        top.append(el("span", "source-badge", `via ${sourceHost(object.source)}`));
       }
       if (object.busy) {
         const label = object.busy_until
@@ -589,42 +612,44 @@ busyDialog: document.getElementById("busy-dialog"),
       date.dateTime = object.created_at;
       footer.append(date);
 
-      const actions = el("div", "card-actions");
-      actions.dataset.adminOnly = "";
-      const editButton = el("button", "button button-ghost button-small", "Edit");
-      editButton.type = "button";
-      editButton.dataset.action = "edit-object";
-      editButton.dataset.id = object.id;
-      editButton.setAttribute("aria-label", `Edit ${object.name}`);
-      const taken = object.busy;
-      const busyButton = el(
-        "button",
-        "button button-ghost button-small",
-        taken ? "Release" : "Mark busy",
-      );
-      busyButton.type = "button";
-      busyButton.dataset.action = taken ? "release-object" : "busy-object";
-      busyButton.dataset.id = object.id;
-      busyButton.setAttribute(
-        "aria-label",
-        taken ? `Release ${object.name}` : `Mark ${object.name} busy`,
-      );
-      const reserveButton = el(
-        "button",
-        "button button-ghost button-small",
-        object.reserved_from ? "Change reservation" : "Reserve",
-      );
-      reserveButton.type = "button";
-      reserveButton.dataset.action = "reserve-object";
-      reserveButton.dataset.id = object.id;
-      reserveButton.setAttribute("aria-label", `Reserve ${object.name}`);
-      const deleteButton = el("button", "button button-danger button-small", "Delete");
-      deleteButton.type = "button";
-      deleteButton.dataset.action = "delete-object";
-      deleteButton.dataset.id = object.id;
-      deleteButton.setAttribute("aria-label", `Delete ${object.name}`);
-      actions.append(editButton, busyButton, reserveButton, deleteButton);
-      footer.append(actions);
+      if (!remote) {
+        const actions = el("div", "card-actions");
+        actions.dataset.adminOnly = "";
+        const editButton = el("button", "button button-ghost button-small", "Edit");
+        editButton.type = "button";
+        editButton.dataset.action = "edit-object";
+        editButton.dataset.id = object.id;
+        editButton.setAttribute("aria-label", `Edit ${object.name}`);
+        const taken = object.busy;
+        const busyButton = el(
+          "button",
+          "button button-ghost button-small",
+          taken ? "Release" : "Mark busy",
+        );
+        busyButton.type = "button";
+        busyButton.dataset.action = taken ? "release-object" : "busy-object";
+        busyButton.dataset.id = object.id;
+        busyButton.setAttribute(
+          "aria-label",
+          taken ? `Release ${object.name}` : `Mark ${object.name} busy`,
+        );
+        const reserveButton = el(
+          "button",
+          "button button-ghost button-small",
+          object.reserved_from ? "Change reservation" : "Reserve",
+        );
+        reserveButton.type = "button";
+        reserveButton.dataset.action = "reserve-object";
+        reserveButton.dataset.id = object.id;
+        reserveButton.setAttribute("aria-label", `Reserve ${object.name}`);
+        const deleteButton = el("button", "button button-danger button-small", "Delete");
+        deleteButton.type = "button";
+        deleteButton.dataset.action = "delete-object";
+        deleteButton.dataset.id = object.id;
+        deleteButton.setAttribute("aria-label", `Delete ${object.name}`);
+        actions.append(editButton, busyButton, reserveButton, deleteButton);
+        footer.append(actions);
+      }
 
       card.append(footer);
       elements.objectGrid.append(card);
@@ -662,6 +687,9 @@ busyDialog: document.getElementById("busy-dialog"),
       }
     }
     renderAuth();
+    if (state.user) {
+      loadFederation();
+    }
   }
 
   async function loadCategories() {
@@ -765,6 +793,125 @@ busyDialog: document.getElementById("busy-dialog"),
       return row;
     });
     elements.reservationsList.replaceChildren(...rows);
+  }
+
+  function sourceHost(value) {
+    try {
+      return new URL(value).host;
+    } catch {
+      return value;
+    }
+  }
+
+  function renderFederation() {
+    const overview = state.federation;
+    if (!overview) {
+      elements.federationActor.textContent = "";
+      elements.peersList.replaceChildren();
+      elements.followersList.replaceChildren();
+      elements.outboxList.replaceChildren();
+      return;
+    }
+
+    elements.federationActor.textContent =
+      `This instance federates as ${overview.actor.handle} (${overview.actor.id}).`;
+
+    elements.peersList.replaceChildren();
+    if (overview.peers.length === 0) {
+      elements.peersList.append(el("p", "muted", "No peers joined yet."));
+    }
+    for (const peer of overview.peers) {
+      const row = el("div", "peer-row");
+      const link = el("a", "peer-actor", peer.actor_id);
+      link.href = peer.actor_id;
+      link.target = "_blank";
+      link.rel = "noopener";
+      row.append(link);
+      const accepted = peer.state === "accepted";
+      row.append(
+        el(
+          "span",
+          accepted ? "peer-badge peer-badge-accepted" : "peer-badge peer-badge-pending",
+          peer.state,
+        ),
+      );
+      row.append(el("span", "peer-date", formatDate(peer.created_at)));
+      const button = el("button", "button button-danger button-small", "Remove");
+      button.type = "button";
+      button.dataset.action = "remove-peer";
+      button.dataset.id = peer.id;
+      button.setAttribute("aria-label", `Remove peer ${peer.actor_id}`);
+      row.append(button);
+      elements.peersList.append(row);
+    }
+
+    elements.followersList.replaceChildren();
+    if (overview.followers.length === 0) {
+      elements.followersList.append(el("p", "muted", "No followers yet."));
+    }
+    for (const follower of overview.followers) {
+      const row = el("div", "follower-row");
+      const link = el("a", "follower-actor", follower.actor_id);
+      link.href = follower.actor_id;
+      link.target = "_blank";
+      link.rel = "noopener";
+      row.append(link);
+      row.append(el("span", "follower-date", formatDate(follower.created_at)));
+      elements.followersList.append(row);
+    }
+
+    const table = el("table", "outbox-table");
+    const headRow = el("tr");
+    headRow.append(
+      el("th", "", "Kind"),
+      el("th", "", "Target"),
+      el("th", "", "Status"),
+      el("th", "", "Published"),
+    );
+    const head = el("thead");
+    head.append(headRow);
+    const body = el("tbody");
+    for (const entry of overview.outbox) {
+      const row = el("tr");
+      row.append(el("td", "", entry.kind), el("td", "", entry.target));
+      const status = entry.delivered_at
+        ? "delivered"
+        : `${entry.attempts} / next retry ${formatDate(entry.next_attempt_at)}`;
+      row.append(el("td", "", status), el("td", "", formatDate(entry.published_at)));
+      body.append(row);
+    }
+    table.append(head, body);
+    elements.outboxList.replaceChildren(table);
+    if (overview.outbox_total > overview.outbox.length) {
+      elements.outboxList.append(
+        el("p", "muted", `Showing the ${overview.outbox.length} newest of ${overview.outbox_total}.`),
+      );
+    }
+  }
+
+  async function loadFederation() {
+    if (!state.user) {
+      state.federation = null;
+      renderFederation();
+      return;
+    }
+    try {
+      state.federation = await api("/api/admin/federation");
+    } catch (error) {
+      state.federation = null;
+      handleActionError(error);
+    }
+    renderFederation();
+  }
+
+  async function removePeer(id) {
+    try {
+      await api(`/api/admin/federation/peers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadFederation();
+      showStatus("Peer removed.", "success");
+    } catch (error) {
+      handleActionError(error);
+    }
   }
 
   function openLogin(message = "") {
@@ -1179,6 +1326,7 @@ busyDialog: document.getElementById("busy-dialog"),
         renderAuth();
         renderCategories();
         renderObjects();
+        loadFederation();
         showStatus(`Signed in as ${state.user.email}.`, "success");
       } catch (error) {
         showFormError(elements.loginError, error.message);
@@ -1196,9 +1344,11 @@ busyDialog: document.getElementById("busy-dialog"),
         }
       }
       state.user = null;
+      state.federation = null;
       renderAuth();
       renderCategories();
       renderObjects();
+      renderFederation();
       showStatus("Signed out.", "success");
     });
 
@@ -1583,6 +1733,42 @@ busyDialog: document.getElementById("busy-dialog"),
       const button = event.target.closest("button[data-action='reserve-object']");
       if (button) {
         openReserveObject(button.dataset.id);
+      }
+    });
+
+    elements.federationRefresh.addEventListener("click", () => loadFederation());
+
+    elements.peerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      hideFormError(elements.peerError);
+      const target = elements.peerTarget.value.trim();
+      if (!target) {
+        showFormError(elements.peerError, "Enter a peer handle or actor URL.");
+        elements.peerTarget.focus();
+        return;
+      }
+      const submit = elements.peerForm.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        await api("/api/admin/federation/peers", { method: "POST", body: { target } });
+        elements.peerForm.reset();
+        await loadFederation();
+        showStatus("Peer join requested.", "success");
+      } catch (error) {
+        if (error.status === 401) {
+          openLogin("Please sign in to continue.");
+        } else {
+          showFormError(elements.peerError, error.message);
+        }
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    elements.peersList.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action='remove-peer']");
+      if (button) {
+        removePeer(button.dataset.id);
       }
     });
 

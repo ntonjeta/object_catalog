@@ -82,6 +82,31 @@
       <div id="reservations-list" class="reservations-list"></div>
     </section>
 
+    <section class="federation-panel" id="federation-panel" aria-labelledby="federation-heading" data-admin-only hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="federation-heading">Federation</h2>
+          <p class="muted">Join peer instances, mirror their announcements, and debug delivery.</p>
+        </div>
+        <button id="federation-refresh" class="button button-ghost" type="button">Refresh</button>
+      </div>
+      <p id="federation-actor" class="muted"></p>
+      <form id="peer-form" class="peer-form">
+        <label class="field peer-target-field">
+          <span>Join peer</span>
+          <input id="peer-target" name="target" type="text" autocomplete="off" placeholder="catalog@peer.example or https://peer.example/ap/actors/catalog">
+        </label>
+        <button class="button button-primary" type="submit">Join</button>
+      </form>
+      <p id="peer-error" class="form-error" role="alert" hidden></p>
+      <h3>Peers</h3>
+      <div id="peers-list" class="peers-list"></div>
+      <h3>Followers</h3>
+      <div id="followers-list" class="followers-list"></div>
+      <h3>Outbox</h3>
+      <div id="outbox-list" class="outbox-list"></div>
+    </section>
+
     <section class="categories-panel" aria-labelledby="categories-heading">
       <div class="section-heading">
         <div>
