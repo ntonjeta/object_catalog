@@ -905,6 +905,17 @@ busyDialog: document.getElementById("busy-dialog"),
   }
 
   async function removePeer(id) {
+    const peer = state.federation?.peers.find((item) => item.id === id);
+    if (!peer) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Remove peer ${sourceHost(peer.actor_id)}? This deletes all objects mirrored from that peer; they are not backfilled if you join again.`,
+      )
+    ) {
+      return;
+    }
     try {
       await api(`/api/admin/federation/peers/${encodeURIComponent(id)}`, { method: "DELETE" });
       await loadFederation();
