@@ -150,6 +150,12 @@
         </label>
       </div>
       <label class="field">
+        <span>Additional images</span>
+        <input id="object-images" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+        <small class="field-hint">Up to 10 total, each ≤5 MB.</small>
+      </label>
+      <div id="object-images-strip" class="image-strip" hidden></div>
+      <label class="field">
         <span>Tags</span>
         <input id="object-tags" name="tags" type="text" placeholder="scifi, classic, sequel">
         <small class="field-hint">Comma-separated; up to 20 tags.</small>

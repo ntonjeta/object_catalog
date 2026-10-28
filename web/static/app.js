@@ -40,6 +40,8 @@
     objectPhotoPreviewWrap: document.getElementById("object-photo-preview-wrap"),
     objectPhotoPreview: document.getElementById("object-photo-preview"),
     objectRemovePhoto: document.getElementById("object-remove-photo"),
+    objectImages: document.getElementById("object-images"),
+    objectImagesStrip: document.getElementById("object-images-strip"),
     objectTags: document.getElementById("object-tags"),
     objectError: document.getElementById("object-error"),
     objectSave: document.getElementById("object-save"),
@@ -84,12 +86,15 @@ busyDialog: document.getElementById("busy-dialog"),
     filters: { q: "", category: "", tag: "" },
     requestId: 0,
     editingObjectId: null,
+    editingObjectImages: [],
+    pendingUploads: [],
     editingBusyId: null,
     editingCategoryId: null,
   };
 
   let statusTimer;
   let photoObjectURL = "";
+  let pendingImageURLs = [];
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -291,6 +296,146 @@ busyDialog: document.getElementById("busy-dialog"),
   function currentObjectImagePath() {
     const object = state.objects.find((item) => item.id === state.editingObjectId);
     return object ? object.image_path : "";
+  }
+
+  function revokePendingImageURLs() {
+    for (const url of pendingImageURLs) {
+      URL.revokeObjectURL(url);
+    }
+    pendingImageURLs = [];
+  }
+
+  function clearPendingUploads() {
+    revokePendingImageURLs();
+    state.pendingUploads = [];
+    elements.objectImages.value = "";
+    renderImagesStrip();
+  }
+
+  function renderImagesStrip() {
+    elements.objectImagesStrip.replaceChildren();
+    if (state.editingObjectImages.length === 0 && state.pendingUploads.length === 0) {
+      elements.objectImagesStrip.hidden = true;
+      return;
+    }
+    elements.objectImagesStrip.hidden = false;
+
+    state.editingObjectImages.forEach((image, index) => {
+      const tile = el("div", "image-tile");
+      const thumb = el("img", "image-thumb");
+      thumb.src = image.url;
+      thumb.alt = "Catalog image";
+      thumb.loading = "lazy";
+      thumb.decoding = "async";
+      thumb.addEventListener("error", () => thumb.remove());
+      tile.append(thumb);
+
+      const actions = el("div", "image-tile-actions");
+      const removeButton = el("button", "button button-danger button-small", "✕");
+      removeButton.type = "button";
+      removeButton.dataset.action = "remove-image";
+      removeButton.dataset.imageId = image.id;
+      removeButton.setAttribute("aria-label", "Remove image");
+      const leftButton = el("button", "button button-ghost button-small", "←");
+      leftButton.type = "button";
+      leftButton.dataset.action = "move-image";
+      leftButton.dataset.imageId = image.id;
+      leftButton.dataset.delta = "-1";
+      leftButton.setAttribute("aria-label", "Move image earlier");
+      leftButton.disabled = index === 0;
+      const rightButton = el("button", "button button-ghost button-small", "→");
+      rightButton.type = "button";
+      rightButton.dataset.action = "move-image";
+      rightButton.dataset.imageId = image.id;
+      rightButton.dataset.delta = "1";
+      rightButton.setAttribute("aria-label", "Move image later");
+      rightButton.disabled = index === state.editingObjectImages.length - 1;
+      actions.append(removeButton, leftButton, rightButton);
+      tile.append(actions);
+      elements.objectImagesStrip.append(tile);
+    });
+
+    pendingImageURLs.forEach((url, index) => {
+      const tile = el("div", "image-tile");
+      const thumb = el("img", "image-thumb");
+      thumb.src = url;
+      thumb.alt = "Pending upload preview";
+      tile.append(thumb);
+
+      const actions = el("div", "image-tile-actions");
+      const removeButton = el("button", "button button-danger button-small", "✕");
+      removeButton.type = "button";
+      removeButton.dataset.action = "remove-pending";
+      removeButton.dataset.index = String(index);
+      removeButton.setAttribute("aria-label", "Remove pending upload");
+      actions.append(removeButton);
+      tile.append(actions);
+      elements.objectImagesStrip.append(tile);
+    });
+  }
+
+  function applyObjectImages(object) {
+    if (!object) {
+      return;
+    }
+    state.editingObjectImages = object.images || [];
+    const cached = state.objects.find((item) => item.id === object.id);
+    if (cached) {
+      cached.image_path = object.image_path;
+      cached.images = state.editingObjectImages;
+    }
+    if (!photoObjectURL) {
+      showPhotoPreview(object.image_path);
+    }
+    renderImagesStrip();
+  }
+
+  async function removeServerImage(imageId) {
+    if (!state.editingObjectId) {
+      return;
+    }
+    try {
+      const data = await api(
+        `/api/objects/${encodeURIComponent(state.editingObjectId)}/images/${encodeURIComponent(imageId)}`,
+        { method: "DELETE" },
+      );
+      applyObjectImages(data.object);
+    } catch (error) {
+      handleActionError(error);
+    }
+  }
+
+  function removePendingUpload(index) {
+    if (index < 0 || index >= state.pendingUploads.length) {
+      return;
+    }
+    URL.revokeObjectURL(pendingImageURLs[index]);
+    pendingImageURLs.splice(index, 1);
+    state.pendingUploads.splice(index, 1);
+    renderImagesStrip();
+  }
+
+  async function moveServerImage(imageId, delta) {
+    if (!state.editingObjectId) {
+      return;
+    }
+    const ordered = state.editingObjectImages.slice();
+    const index = ordered.findIndex((image) => image.id === imageId);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= ordered.length) {
+      return;
+    }
+    const [moved] = ordered.splice(index, 1);
+    ordered.splice(target, 0, moved);
+    try {
+      const data = await api(`/api/objects/${encodeURIComponent(state.editingObjectId)}/images/order`, {
+        method: "PATCH",
+        body: { image_ids: ordered.map((image) => image.id) },
+      });
+      applyObjectImages(data.object);
+    } catch (error) {
+      handleActionError(error);
+    }
   }
 
   function populateCategorySelects() {
@@ -632,6 +777,8 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectPhoto.value = "";
     elements.objectRemovePhoto.checked = false;
     clearPhotoPreview();
+    state.editingObjectImages = [];
+    clearPendingUploads();
     populateCategorySelects();
     hideFormError(elements.objectError);
     openDialog(elements.objectDialog);
@@ -683,6 +830,8 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectPhoto.value = "";
     elements.objectRemovePhoto.checked = false;
     showPhotoPreview(object.image_path);
+    state.editingObjectImages = (object.images || []).slice();
+    clearPendingUploads();
     populateCategorySelects();
     elements.objectCategory.value = object.category ? object.category.id : "";
     hideFormError(elements.objectError);
@@ -916,21 +1065,49 @@ busyDialog: document.getElementById("busy-dialog"),
         formData.append("remove_photo", "true");
       }
       elements.objectSave.disabled = true;
+      let objectId = state.editingObjectId;
+      let saved = false;
       try {
-        if (state.editingObjectId) {
-          await api(`/api/objects/${encodeURIComponent(state.editingObjectId)}`, {
+        if (objectId) {
+          await api(`/api/objects/${encodeURIComponent(objectId)}`, {
             method: "PATCH",
             body: formData,
           });
           showStatus("Object updated.", "success");
         } else {
-          await api("/api/objects", { method: "POST", body: formData });
+          const data = await api("/api/objects", { method: "POST", body: formData });
+          objectId = data.object.id;
           showStatus("Object created.", "success");
+        }
+        saved = true;
+        if (state.pendingUploads.length > 0) {
+          const imagesForm = new FormData();
+          for (const file of state.pendingUploads) {
+            imagesForm.append("images", file);
+          }
+          const data = await api(`/api/objects/${encodeURIComponent(objectId)}/images`, {
+            method: "POST",
+            body: imagesForm,
+          });
+          state.editingObjectImages = data.object.images || [];
+          clearPendingUploads();
+          showStatus("Object images uploaded.", "success");
         }
         closeDialog(elements.objectDialog);
         await loadObjects();
       } catch (error) {
-        handleFormError(error, elements.objectError, elements.objectDialog);
+        if (saved) {
+          // The object is persisted; keep the dialog open so chosen files are not lost.
+          if (objectId !== state.editingObjectId) {
+            state.editingObjectId = objectId;
+            elements.objectDialogTitle.textContent = "Edit object";
+            elements.objectSave.textContent = "Save changes";
+          }
+          showFormError(elements.objectError, error.message);
+          await loadObjects();
+        } else {
+          handleFormError(error, elements.objectError, elements.objectDialog);
+        }
       } finally {
         elements.objectSave.disabled = false;
       }
@@ -1109,6 +1286,54 @@ busyDialog: document.getElementById("busy-dialog"),
       showPhotoPreview(URL.createObjectURL(file), true);
     });
 
+    elements.objectImages.addEventListener("change", () => {
+      hideFormError(elements.objectError);
+      const files = Array.from(elements.objectImages.files);
+      elements.objectImages.value = "";
+      if (files.length === 0) {
+        return;
+      }
+      let rejectedSize = false;
+      let rejectedCount = false;
+      const room = 10 - state.editingObjectImages.length - state.pendingUploads.length;
+      let kept = 0;
+      for (const file of files) {
+        if (file.size > 5 * 1024 * 1024) {
+          rejectedSize = true;
+          continue;
+        }
+        if (kept >= room) {
+          rejectedCount = true;
+          continue;
+        }
+        state.pendingUploads.push(file);
+        pendingImageURLs.push(URL.createObjectURL(file));
+        kept += 1;
+      }
+      if (rejectedSize && rejectedCount) {
+        showFormError(elements.objectError, "Up to 10 images per object, each at most 5 MB.");
+      } else if (rejectedSize) {
+        showFormError(elements.objectError, "Photo must be at most 5 MB.");
+      } else if (rejectedCount) {
+        showFormError(elements.objectError, "Up to 10 images per object.");
+      }
+      renderImagesStrip();
+    });
+
+    elements.objectImagesStrip.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action]");
+      if (!button) {
+        return;
+      }
+      if (button.dataset.action === "remove-image") {
+        removeServerImage(button.dataset.imageId);
+      } else if (button.dataset.action === "remove-pending") {
+        removePendingUpload(Number(button.dataset.index));
+      } else if (button.dataset.action === "move-image") {
+        moveServerImage(button.dataset.imageId, Number(button.dataset.delta));
+      }
+    });
+
     elements.objectRemovePhoto.addEventListener("change", () => {
       if (elements.objectRemovePhoto.checked) {
         elements.objectPhoto.value = "";
@@ -1125,6 +1350,7 @@ busyDialog: document.getElementById("busy-dialog"),
 
     elements.objectDialog.addEventListener("close", () => {
       clearPhotoPreview();
+      clearPendingUploads();
     });
 
     elements.objectGrid.addEventListener("click", (event) => {
