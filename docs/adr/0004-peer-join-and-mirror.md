@@ -34,10 +34,11 @@ write into the catalog.
    asked for. When resolution fails nothing is stored: junk syntax and a
    self-follow are `invalid_input`, an unreachable or unknown peer is
    `not_found`. A peer that resolves is stored as `pending` together with
-   the id of its follow activity (`<BASE_URL>/ap/outbox/<peer-id>`); the
-   peer's `Accept` for exactly that activity moves the peer to `accepted`.
-   Joining again refreshes the follow activity and resets the state to
-   `pending`.
+   the id of its follow activity (`<BASE_URL>/ap/outbox/<outbox-entry-id>`,
+   the queued follow entry); the peer's `Accept` for exactly that activity
+   moves the peer to `accepted`. Every join queues a new follow entry with
+   a new activity id, while the peer row keeps the id it was created with;
+   joining again resets the state to `pending`.
 3. **Ingest is gated on the peers table, not on followership.** Only an
    actor that is a peer row in state `accepted` may write content into the
    catalog. A correctly signed activity from an unknown actor, or from an

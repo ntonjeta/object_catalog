@@ -234,9 +234,10 @@ The administrator can join another instance from the admin panel, by handle
   resolved is not stored at all — junk syntax and a self-follow are
   `invalid_input` (400), an unreachable or unknown peer is `not_found` (404).
 - A joined peer is stored as `pending` with the id of its follow activity
-  (`<BASE_URL>/ap/outbox/<peer-id>`). The peer's `Accept` for exactly that
-  activity moves the peer to `accepted`. Joining again refreshes the follow
-  activity and resets the state to `pending`.
+  (`<BASE_URL>/ap/outbox/<outbox-entry-id>`, the queued follow entry). The
+  peer's `Accept` for exactly that activity moves the peer to `accepted`.
+  Every join queues a new follow entry with a new activity id, while the
+  peer row keeps the id it was created with; the state resets to `pending`.
 - Outbound `Follow`/`Undo` are outbox entries delivered by the same
   deliverer as object announcements, with the same backoff. They address the
   target peer's inbox only and are never fanned out to followers.

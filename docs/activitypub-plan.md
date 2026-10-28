@@ -68,7 +68,8 @@ Implementation notes for when PR 4 is picked up:
 
 - The inbox pipeline already parses `type`/`actor`/`object` into
   `inbox_events` columns (`decodeInboxEvent`); `Federation.ProcessPendingInbox`
-  currently drops non-Follow/Undo types — add the reservation branch there.
+  now handles `Follow`/`Undo`, `Accept`, and peer `Create`/`Update`/`Delete`,
+  and still drops every other type — add the reservation branch there.
 - The reservation object must be dereferenced: a `Create`/`Propose` carries
   an object whose id is a local `Article` (`/ap/objects/{id}`); map the id
   back to the catalog object.
