@@ -714,6 +714,148 @@ input[type="file"] {
   padding: 0;
 }
 
+.object-card[role="button"] {
+  cursor: pointer;
+}
+
+.object-card:focus-visible {
+  outline: 3px solid rgba(31, 94, 255, 0.32);
+  outline-offset: 2px;
+}
+
+.dialog-detail {
+  width: min(720px, calc(100% - 32px));
+}
+
+.detail-body {
+  padding: 24px;
+}
+
+.detail-loading {
+  color: var(--text-muted);
+  padding: 24px 0;
+  text-align: center;
+}
+
+.detail-content {
+  display: grid;
+  gap: 16px;
+}
+
+.detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-head h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-gallery {
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.detail-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.detail-main-image {
+  width: 100%;
+  max-height: 420px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
+.detail-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 22px;
+  line-height: 1;
+  opacity: 0.92;
+}
+
+.detail-arrow-prev {
+  left: 8px;
+}
+
+.detail-arrow-next {
+  right: 8px;
+}
+
+.detail-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.detail-thumb {
+  border: 2px solid transparent;
+  border-radius: 7px;
+  background: var(--surface-muted);
+  padding: 0;
+  cursor: pointer;
+}
+
+.detail-thumb.is-active {
+  border-color: var(--primary);
+}
+
+.detail-thumb-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.detail-caption {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.detail-content h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.detail-description {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detail-description.is-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.detail-dates {
+  margin: 0;
+  font-size: 13px;
+}
+
 .import-result {
   display: grid;
   gap: 8px;

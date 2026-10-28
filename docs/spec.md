@@ -154,6 +154,10 @@ The embedded frontend provides:
 
 - public browsing, search, category filtering, tag filtering, and pagination;
 - object thumbnails and photo previews;
+- an object detail dialog opened by clicking a card (or `#object/{id}` deep
+  link): full description, image gallery with main view, previous/next arrows,
+  and selectable thumbnails, availability badges, tags, and added/updated dates;
+  administrators additionally get an edit shortcut inside the dialog;
 - administrator login and logout;
 - object create/edit/delete with photo upload/replacement/removal;
 - an image strip in the object dialog: add multiple files, remove individual
