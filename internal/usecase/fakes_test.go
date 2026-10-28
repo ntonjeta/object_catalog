@@ -170,14 +170,20 @@ func (f *fakeCategories) Delete(_ context.Context, id string) error {
 }
 
 type fakeObjects struct {
-	objects    map[string]domain.Object
-	lastFilter ObjectFilter
-	createErr  error
-	updateErr  error
+	objects         map[string]domain.Object
+	images          map[string][]domain.ObjectImage
+	lastFilter      ObjectFilter
+	createErr       error
+	updateErr       error
+	imagesErr       error
+	replaceImageErr error
 }
 
 func newFakeObjects() *fakeObjects {
-	return &fakeObjects{objects: make(map[string]domain.Object)}
+	return &fakeObjects{
+		objects: make(map[string]domain.Object),
+		images:  make(map[string][]domain.ObjectImage),
+	}
 }
 
 func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
@@ -185,7 +191,24 @@ func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
 		return f.createErr
 	}
 	f.objects[object.ID] = object
+	images := object.Images
+	// Mirrors the sqlite repo: a bare uploaded-file cover seeds row 0 in the
+	// same write; URL or root-relative covers stay out of the list.
+	if len(images) == 0 && isBareImageFileName(object.ImagePath) {
+		id, err := domain.NewID()
+		if err != nil {
+			return fmt.Errorf("generate object image id: %w", err)
+		}
+		images = []domain.ObjectImage{{ID: id, FileName: object.ImagePath}}
+	}
+	if len(images) > 0 {
+		f.images[object.ID] = append([]domain.ObjectImage{}, images...)
+	}
 	return nil
+}
+
+func isBareImageFileName(imagePath string) bool {
+	return imagePath != "" && !strings.HasPrefix(imagePath, "/") && !strings.Contains(imagePath, "://")
 }
 
 func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
@@ -195,6 +218,8 @@ func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
 	if _, ok := f.objects[object.ID]; !ok {
 		return domain.ErrNotFound
 	}
+	// Mirrors the sqlite repo: Update never rewrites image rows; only
+	// ReplaceImages does.
 	f.objects[object.ID] = object
 	return nil
 }
@@ -204,6 +229,7 @@ func (f *fakeObjects) Delete(_ context.Context, id string) error {
 		return domain.ErrNotFound
 	}
 	delete(f.objects, id)
+	delete(f.images, id)
 	return nil
 }
 
@@ -212,6 +238,7 @@ func (f *fakeObjects) ByID(_ context.Context, id string) (domain.Object, error) 
 	if !ok {
 		return domain.Object{}, domain.ErrNotFound
 	}
+	object.Images = f.storedImages(id)
 	return object, nil
 }
 
@@ -228,6 +255,7 @@ func (f *fakeObjects) ByName(_ context.Context, name string) (domain.Object, err
 	case 0:
 		return domain.Object{}, domain.ErrNotFound
 	case 1:
+		match.Images = f.storedImages(match.ID)
 		return match, nil
 	default:
 		return domain.Object{}, fmt.Errorf("%w: multiple objects named %q", domain.ErrConflict, name)
@@ -237,10 +265,32 @@ func (f *fakeObjects) ByName(_ context.Context, name string) (domain.Object, err
 func (f *fakeObjects) List(_ context.Context, filter ObjectFilter) ([]domain.Object, int, error) {
 	f.lastFilter = filter
 	objects := make([]domain.Object, 0, len(f.objects))
-	for _, object := range f.objects {
+	for id, object := range f.objects {
+		object.Images = f.storedImages(id)
 		objects = append(objects, object)
 	}
 	return objects, len(objects), nil
+}
+
+func (f *fakeObjects) Images(_ context.Context, objectID string) ([]domain.ObjectImage, error) {
+	if f.imagesErr != nil {
+		return nil, f.imagesErr
+	}
+	return f.storedImages(objectID), nil
+}
+
+func (f *fakeObjects) ReplaceImages(_ context.Context, objectID string, images []domain.ObjectImage) error {
+	if f.replaceImageErr != nil {
+		return f.replaceImageErr
+	}
+	f.images[objectID] = append([]domain.ObjectImage{}, images...)
+	return nil
+}
+
+// storedImages returns an independent copy of the image rows for one object.
+func (f *fakeObjects) storedImages(objectID string) []domain.ObjectImage {
+	stored := f.images[objectID]
+	return append([]domain.ObjectImage{}, stored...)
 }
 
 type fakePhotos struct {

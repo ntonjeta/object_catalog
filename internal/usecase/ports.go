@@ -64,4 +64,6 @@ type ObjectRepository interface {
 	ByID(ctx context.Context, id string) (domain.Object, error)
 	ByName(ctx context.Context, name string) (domain.Object, error)
 	List(ctx context.Context, filter ObjectFilter) ([]domain.Object, int, error)
+	Images(ctx context.Context, objectID string) ([]domain.ObjectImage, error)
+	ReplaceImages(ctx context.Context, objectID string, images []domain.ObjectImage) error
 }
