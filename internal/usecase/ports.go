@@ -58,12 +58,73 @@ type ObjectFilter struct {
 }
 
 type ObjectRepository interface {
-	Create(ctx context.Context, object domain.Object) error
-	Update(ctx context.Context, object domain.Object) error
-	Delete(ctx context.Context, id string) error
+	Create(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error
+	Update(ctx context.Context, object domain.Object, entry domain.OutboxEntry) error
+	Delete(ctx context.Context, id string, entry domain.OutboxEntry) error
 	ByID(ctx context.Context, id string) (domain.Object, error)
 	ByName(ctx context.Context, name string) (domain.Object, error)
 	List(ctx context.Context, filter ObjectFilter) ([]domain.Object, int, error)
 	Images(ctx context.Context, objectID string) ([]domain.ObjectImage, error)
 	ReplaceImages(ctx context.Context, objectID string, images []domain.ObjectImage) error
+}
+
+type InstanceKeyRepository interface {
+	Create(ctx context.Context, key domain.InstanceKey) error
+	Get(ctx context.Context) (domain.InstanceKey, error)
+}
+
+// OutboxRepository stores federated activities. Append is used standalone by
+// the Federation use case; the object mutations embed the entry in the same
+// SQLite transaction through ObjectRepository.
+type OutboxRepository interface {
+	Append(ctx context.Context, entry domain.OutboxEntry) error
+	ByID(ctx context.Context, id string) (domain.OutboxEntry, error)
+	List(ctx context.Context, limit, offset int) ([]domain.OutboxEntry, int, error)
+	Pending(ctx context.Context, now time.Time, limit int) ([]domain.OutboxEntry, error)
+	MarkDelivered(ctx context.Context, id string, at time.Time) error
+	MarkAttempt(ctx context.Context, id string, attempts int, nextAttemptAt time.Time) error
+}
+
+type FollowerRepository interface {
+	Add(ctx context.Context, follower domain.Follower) error
+	Remove(ctx context.Context, actorID string) error
+	List(ctx context.Context) ([]domain.Follower, error)
+}
+
+type InboxEventRepository interface {
+	Add(ctx context.Context, event domain.InboxEvent) error
+	Pending(ctx context.Context, now time.Time, limit int) ([]domain.InboxEvent, error)
+	MarkProcessed(ctx context.Context, id string, at time.Time) error
+	MarkAttempt(ctx context.Context, id string, attempts int, nextAttemptAt time.Time) error
+}
+
+// RemoteActorRepository resolves a remote actor id to its document (inbox).
+// Resolve accepts the admin join input: "handle@host", "acct:handle@host"
+// (via WebFinger) or a direct actor URL.
+type RemoteActorRepository interface {
+	FetchActor(ctx context.Context, actorID string) (domain.RemoteActor, error)
+	Resolve(ctx context.Context, input string) (domain.RemoteActor, error)
+}
+
+// PeerRepository stores the peer instances this instance follows. Join and
+// Leave each persist the peer, its outbox activity and (for Leave) its mirrors
+// atomically. Join keys on actor id: a re-join refreshes the inbox URL, follow
+// activity id and state while keeping the original id and created time.
+type PeerRepository interface {
+	Join(ctx context.Context, peer domain.Peer, follow domain.OutboxEntry) (domain.Peer, error)
+	MarkAccepted(ctx context.Context, actorID string) error
+	ByFollowActivityID(ctx context.Context, followActivityID string) (domain.Peer, error)
+	ByID(ctx context.Context, id string) (domain.Peer, error)
+	Leave(ctx context.Context, peer domain.Peer, undo domain.OutboxEntry) error
+	List(ctx context.Context) ([]domain.Peer, error)
+}
+
+// RemoteObjectRepository mirrors objects announced by joined peers. Each
+// mutation checks the announcing peer's accepted state in the same transaction
+// as the write, so removal cannot interleave and leave an unowned mirror.
+type RemoteObjectRepository interface {
+	PutFromAcceptedPeer(ctx context.Context, object domain.RemoteObject) error
+	// DeleteFromAcceptedPeer tolerates an unknown object id because duplicate
+	// ActivityPub Delete deliveries are normal.
+	DeleteFromAcceptedPeer(ctx context.Context, id, peerActorID string) error
 }

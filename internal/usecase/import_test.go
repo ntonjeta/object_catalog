@@ -151,7 +151,7 @@ func TestObjectsImportRejectsDuplicateExistingNames(t *testing.T) {
 	uc := NewObjects(objects, categories, newFakePhotos(), newFakeReservations(), newFakeActivities())
 
 	for _, id := range []string{"one", "two"} {
-		if err := objects.Create(ctx, domain.Object{ID: id, Name: "Dune"}); err != nil {
+		if err := objects.Create(ctx, domain.Object{ID: id, Name: "Dune"}, domain.OutboxEntry{}); err != nil {
 			t.Fatalf("create object: %v", err)
 		}
 	}

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -172,6 +173,7 @@ func (f *fakeCategories) Delete(_ context.Context, id string) error {
 type fakeObjects struct {
 	objects         map[string]domain.Object
 	images          map[string][]domain.ObjectImage
+	entries         []domain.OutboxEntry
 	lastFilter      ObjectFilter
 	createErr       error
 	updateErr       error
@@ -186,7 +188,7 @@ func newFakeObjects() *fakeObjects {
 	}
 }
 
-func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
+func (f *fakeObjects) Create(_ context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
@@ -204,6 +206,7 @@ func (f *fakeObjects) Create(_ context.Context, object domain.Object) error {
 	if len(images) > 0 {
 		f.images[object.ID] = append([]domain.ObjectImage{}, images...)
 	}
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
@@ -211,7 +214,7 @@ func isBareImageFileName(imagePath string) bool {
 	return imagePath != "" && !strings.HasPrefix(imagePath, "/") && !strings.Contains(imagePath, "://")
 }
 
-func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
+func (f *fakeObjects) Update(_ context.Context, object domain.Object, entry domain.OutboxEntry) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
@@ -221,15 +224,17 @@ func (f *fakeObjects) Update(_ context.Context, object domain.Object) error {
 	// Mirrors the sqlite repo: Update never rewrites image rows; only
 	// ReplaceImages does.
 	f.objects[object.ID] = object
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
-func (f *fakeObjects) Delete(_ context.Context, id string) error {
+func (f *fakeObjects) Delete(_ context.Context, id string, entry domain.OutboxEntry) error {
 	if _, ok := f.objects[id]; !ok {
 		return domain.ErrNotFound
 	}
 	delete(f.objects, id)
 	delete(f.images, id)
+	f.entries = append(f.entries, entry)
 	return nil
 }
 
@@ -372,4 +377,469 @@ func (f *fakeActivities) Create(_ context.Context, activity domain.Activity) err
 
 func (f *fakeActivities) List(_ context.Context, _ ActivityFilter) ([]domain.Activity, int, error) {
 	return f.activities, len(f.activities), nil
+}
+
+type fakeInstanceKeys struct {
+	key     domain.InstanceKey
+	stored  bool
+	race    bool
+	raceKey domain.InstanceKey
+}
+
+func (f *fakeInstanceKeys) Create(_ context.Context, key domain.InstanceKey) error {
+	if f.stored {
+		return domain.ErrConflict
+	}
+	if f.race {
+		f.key = f.raceKey
+		f.stored = true
+		return domain.ErrConflict
+	}
+	f.key = key
+	f.stored = true
+	return nil
+}
+
+func (f *fakeInstanceKeys) Get(_ context.Context) (domain.InstanceKey, error) {
+	if !f.stored {
+		return domain.InstanceKey{}, domain.ErrNotFound
+	}
+	return f.key, nil
+}
+
+type fakeOutbox struct {
+	entries   []domain.OutboxEntry
+	appended  []domain.OutboxEntry
+	appendErr error
+}
+
+func newFakeOutbox() *fakeOutbox {
+	return &fakeOutbox{}
+}
+
+func (f *fakeOutbox) Append(_ context.Context, entry domain.OutboxEntry) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	f.entries = append(f.entries, entry)
+	f.appended = append(f.appended, entry)
+	return nil
+}
+
+func (f *fakeOutbox) ByID(_ context.Context, id string) (domain.OutboxEntry, error) {
+	for _, entry := range f.entries {
+		if entry.ID == id {
+			return entry, nil
+		}
+	}
+	return domain.OutboxEntry{}, domain.ErrNotFound
+}
+
+func (f *fakeOutbox) List(_ context.Context, limit, offset int) ([]domain.OutboxEntry, int, error) {
+	return f.entries, len(f.entries), nil
+}
+
+func (f *fakeOutbox) Pending(_ context.Context, now time.Time, limit int) ([]domain.OutboxEntry, error) {
+	pending := make([]domain.OutboxEntry, 0)
+	for _, entry := range f.entries {
+		if entry.DeliveredAt == nil && !entry.NextAttemptAt.After(now) {
+			pending = append(pending, entry)
+		}
+	}
+	return pending, nil
+}
+
+func (f *fakeOutbox) MarkDelivered(_ context.Context, id string, at time.Time) error {
+	for i, entry := range f.entries {
+		if entry.ID == id {
+			f.entries[i].DeliveredAt = &at
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeOutbox) MarkAttempt(_ context.Context, id string, attempts int, nextAttemptAt time.Time) error {
+	for i, entry := range f.entries {
+		if entry.ID == id {
+			f.entries[i].Attempts = attempts
+			f.entries[i].NextAttemptAt = nextAttemptAt
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+type fakeFollowers struct {
+	followers map[string]domain.Follower
+}
+
+func newFakeFollowers() *fakeFollowers {
+	return &fakeFollowers{followers: make(map[string]domain.Follower)}
+}
+
+func (f *fakeFollowers) Add(_ context.Context, follower domain.Follower) error {
+	f.followers[follower.ActorID] = follower
+	return nil
+}
+
+func (f *fakeFollowers) Remove(_ context.Context, actorID string) error {
+	if _, ok := f.followers[actorID]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(f.followers, actorID)
+	return nil
+}
+
+func (f *fakeFollowers) List(_ context.Context) ([]domain.Follower, error) {
+	followers := make([]domain.Follower, 0, len(f.followers))
+	for _, follower := range f.followers {
+		followers = append(followers, follower)
+	}
+	return followers, nil
+}
+
+type fakeRemoteActors struct {
+	actors map[string]domain.RemoteActor
+	// resolved, when non-zero, is what Resolve returns regardless of the
+	// actors fixture map. FetchActor ignores it.
+	resolved domain.RemoteActor
+	err      error
+}
+
+func newFakeRemoteActors() *fakeRemoteActors {
+	return &fakeRemoteActors{actors: make(map[string]domain.RemoteActor)}
+}
+
+func (f *fakeRemoteActors) FetchActor(_ context.Context, actorID string) (domain.RemoteActor, error) {
+	if f.err != nil {
+		return domain.RemoteActor{}, f.err
+	}
+	actor, ok := f.actors[actorID]
+	if !ok {
+		return domain.RemoteActor{}, fmt.Errorf("fetch actor %q: not found", actorID)
+	}
+	return actor, nil
+}
+
+// Resolve mirrors the adapter port: the fake has no WebFinger, so fixture
+// input is treated as a direct actor id. The resolved fixture short-circuits
+// the map lookup so tests can return an actor id the input does not name.
+func (f *fakeRemoteActors) Resolve(_ context.Context, input string) (domain.RemoteActor, error) {
+	if f.err != nil {
+		return domain.RemoteActor{}, f.err
+	}
+	if f.resolved != (domain.RemoteActor{}) {
+		return f.resolved, nil
+	}
+	actor, ok := f.actors[input]
+	if !ok {
+		return domain.RemoteActor{}, fmt.Errorf("fetch actor %q: not found", input)
+	}
+	return actor, nil
+}
+
+type fakeInboxEvents struct {
+	events []domain.InboxEvent
+	addErr error
+}
+
+func newFakeInboxEvents() *fakeInboxEvents {
+	return &fakeInboxEvents{}
+}
+
+func (f *fakeInboxEvents) Add(_ context.Context, event domain.InboxEvent) error {
+	if f.addErr != nil {
+		return f.addErr
+	}
+	for _, existing := range f.events {
+		if existing.ID == event.ID {
+			return domain.ErrConflict
+		}
+	}
+	f.events = append(f.events, event)
+	return nil
+}
+
+func (f *fakeInboxEvents) Pending(_ context.Context, now time.Time, _ int) ([]domain.InboxEvent, error) {
+	pending := make([]domain.InboxEvent, 0)
+	for _, event := range f.events {
+		if event.ProcessedAt == nil && !event.NextAttemptAt.After(now) {
+			pending = append(pending, event)
+		}
+	}
+	return pending, nil
+}
+
+func (f *fakeInboxEvents) MarkProcessed(_ context.Context, id string, at time.Time) error {
+	for i, event := range f.events {
+		if event.ID == id {
+			f.events[i].ProcessedAt = &at
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeInboxEvents) MarkAttempt(_ context.Context, id string, attempts int, nextAttemptAt time.Time) error {
+	for i, event := range f.events {
+		if event.ID == id {
+			f.events[i].Attempts = attempts
+			f.events[i].NextAttemptAt = nextAttemptAt
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+// fakeCallLog records cross-repository call order when it is attached to
+// several fakes; methods stay no-ops while the field is nil.
+type fakeCallLog struct {
+	ops []string
+}
+
+func (l *fakeCallLog) record(op string) {
+	if l == nil {
+		return
+	}
+	l.ops = append(l.ops, op)
+}
+
+type fakePeers struct {
+	peers         []domain.Peer
+	removed       []string
+	accepted      []string
+	removeErr     error
+	outbox        *fakeOutbox
+	remoteObjects *fakeRemoteObjects
+	log           *fakeCallLog
+}
+
+func newFakePeers() *fakePeers {
+	return &fakePeers{}
+}
+
+// Upsert mimics the sqlite repo: keyed on actor id, a re-join refreshes the
+// inbox URL, follow activity id and state while keeping the stored id and
+// created time.
+func (f *fakePeers) Upsert(_ context.Context, peer domain.Peer) error {
+	for i, existing := range f.peers {
+		if existing.ActorID == peer.ActorID {
+			existing.InboxURL = peer.InboxURL
+			existing.FollowActivityID = peer.FollowActivityID
+			existing.State = peer.State
+			f.peers[i] = existing
+			return nil
+		}
+	}
+	f.peers = append(f.peers, peer)
+	return nil
+}
+
+// Join applies the same atomic peer+outbox mutation as the sqlite adapter.
+func (f *fakePeers) Join(ctx context.Context, peer domain.Peer, follow domain.OutboxEntry) (domain.Peer, error) {
+	before := append([]domain.Peer(nil), f.peers...)
+	rollback := func() {
+		f.peers = before
+	}
+	if err := f.Upsert(ctx, peer); err != nil {
+		return domain.Peer{}, err
+	}
+	stored, err := f.ByFollowActivityID(ctx, peer.FollowActivityID)
+	if err != nil {
+		rollback()
+		return domain.Peer{}, err
+	}
+	if err := f.outbox.Append(ctx, follow); err != nil {
+		rollback()
+		return domain.Peer{}, err
+	}
+	return stored, nil
+}
+
+func (f *fakePeers) MarkAccepted(_ context.Context, actorID string) error {
+	for i, peer := range f.peers {
+		if peer.ActorID == actorID {
+			f.peers[i].State = domain.PeerAccepted
+			f.accepted = append(f.accepted, actorID)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakePeers) ByFollowActivityID(_ context.Context, followActivityID string) (domain.Peer, error) {
+	for _, peer := range f.peers {
+		if peer.FollowActivityID == followActivityID {
+			return peer, nil
+		}
+	}
+	return domain.Peer{}, domain.ErrNotFound
+}
+
+func (f *fakePeers) ByID(_ context.Context, id string) (domain.Peer, error) {
+	for _, peer := range f.peers {
+		if peer.ID == id {
+			return peer, nil
+		}
+	}
+	return domain.Peer{}, domain.ErrNotFound
+}
+
+func (f *fakePeers) Remove(_ context.Context, id string) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	for i, peer := range f.peers {
+		if peer.ID == id {
+			f.peers = append(f.peers[:i], f.peers[i+1:]...)
+			f.removed = append(f.removed, id)
+			f.log.record("peers.Remove")
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+// Leave applies the same atomic outbox+mirror+peer mutation as sqlite. The
+// snapshots make injected mid-operation failures roll back every fake table.
+func (f *fakePeers) Leave(ctx context.Context, peer domain.Peer, undo domain.OutboxEntry) error {
+	peersBefore := append([]domain.Peer(nil), f.peers...)
+	removedBefore := append([]string(nil), f.removed...)
+	entriesBefore := append([]domain.OutboxEntry(nil), f.outbox.entries...)
+	appendedBefore := append([]domain.OutboxEntry(nil), f.outbox.appended...)
+	objectsBefore := append([]domain.RemoteObject(nil), f.remoteObjects.objects...)
+	deletedPeersBefore := append([]string(nil), f.remoteObjects.deletedPeers...)
+	var opsBefore []string
+	if f.log != nil {
+		opsBefore = append([]string(nil), f.log.ops...)
+	}
+	rollback := func() {
+		f.peers = peersBefore
+		f.removed = removedBefore
+		f.outbox.entries = entriesBefore
+		f.outbox.appended = appendedBefore
+		f.remoteObjects.objects = objectsBefore
+		f.remoteObjects.deletedPeers = deletedPeersBefore
+		if f.log != nil {
+			f.log.ops = opsBefore
+		}
+	}
+	if err := f.outbox.Append(ctx, undo); err != nil {
+		rollback()
+		return err
+	}
+	if err := f.remoteObjects.DeleteByPeer(ctx, peer.ActorID); err != nil {
+		rollback()
+		return err
+	}
+	if err := f.Remove(ctx, peer.ID); err != nil {
+		rollback()
+		return err
+	}
+	return nil
+}
+
+func (f *fakePeers) List(_ context.Context) ([]domain.Peer, error) {
+	peers := make([]domain.Peer, len(f.peers))
+	copy(peers, f.peers)
+	return peers, nil
+}
+
+type fakeRemoteObjects struct {
+	objects         []domain.RemoteObject
+	puts            []domain.RemoteObject
+	deleted         []string
+	deletedPeers    []string
+	deleteByPeerErr error
+	beforePut       func()
+	peers           *fakePeers
+	log             *fakeCallLog
+}
+
+func newFakeRemoteObjects() *fakeRemoteObjects {
+	return &fakeRemoteObjects{}
+}
+
+// Put mirrors the sqlite upsert: the row for the given id is replaced whole.
+func (f *fakeRemoteObjects) Put(ctx context.Context, object domain.RemoteObject) error {
+	if f.beforePut != nil {
+		f.beforePut()
+	}
+	return f.put(ctx, object)
+}
+
+func (f *fakeRemoteObjects) put(_ context.Context, object domain.RemoteObject) error {
+	for i, existing := range f.objects {
+		if existing.ID == object.ID {
+			f.objects[i] = object
+			f.puts = append(f.puts, object)
+			return nil
+		}
+	}
+	f.objects = append(f.objects, object)
+	f.puts = append(f.puts, object)
+	return nil
+}
+
+func (f *fakeRemoteObjects) acceptedPeer(actorID string) bool {
+	if f.peers == nil {
+		return false
+	}
+	for _, peer := range f.peers.peers {
+		if peer.ActorID == actorID && peer.State == domain.PeerAccepted {
+			return true
+		}
+	}
+	return false
+}
+
+// PutFromAcceptedPeer runs the deterministic interleaving hook before its
+// accepted check, then keeps the check and write together just like sqlite's
+// transaction. Removal therefore either happens first (drop) or after (cascade).
+func (f *fakeRemoteObjects) PutFromAcceptedPeer(ctx context.Context, object domain.RemoteObject) error {
+	if f.beforePut != nil {
+		f.beforePut()
+	}
+	if !f.acceptedPeer(object.PeerActorID) {
+		return nil
+	}
+	return f.put(ctx, object)
+}
+
+func (f *fakeRemoteObjects) DeleteFromAcceptedPeer(ctx context.Context, id, peerActorID string) error {
+	if !f.acceptedPeer(peerActorID) {
+		return nil
+	}
+	if err := f.Delete(ctx, id); err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeRemoteObjects) Delete(_ context.Context, id string) error {
+	for i, object := range f.objects {
+		if object.ID == id {
+			f.objects = append(f.objects[:i], f.objects[i+1:]...)
+			f.deleted = append(f.deleted, id)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeRemoteObjects) DeleteByPeer(_ context.Context, peerActorID string) error {
+	if f.deleteByPeerErr != nil {
+		return f.deleteByPeerErr
+	}
+	kept := make([]domain.RemoteObject, 0, len(f.objects))
+	for _, object := range f.objects {
+		if object.PeerActorID != peerActorID {
+			kept = append(kept, object)
+		}
+	}
+	f.objects = kept
+	f.deletedPeers = append(f.deletedPeers, peerActorID)
+	f.log.record("remoteObjects.DeleteByPeer")
+	return nil
 }

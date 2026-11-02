@@ -66,8 +66,10 @@ type objectResponse struct {
 	Reservation  *reservationResponse `json:"reservation"`
 	Category     *categoryResponse    `json:"category"`
 	Tags         []string             `json:"tags"`
-	CreatedAt    time.Time            `json:"created_at"`
-	UpdatedAt    time.Time            `json:"updated_at"`
+	// Source is the peer actor id for mirrored objects; empty for local ones.
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type objectEnvelope struct {
@@ -277,6 +279,7 @@ func toObjectResponse(object domain.Object) objectResponse {
 		BusyUntil:    object.BusyUntil,
 		ReservedFrom: reservationStart(object.Reservation),
 		Tags:         object.Tags,
+		Source:       object.Source,
 		CreatedAt:    object.CreatedAt,
 		UpdatedAt:    object.UpdatedAt,
 	}

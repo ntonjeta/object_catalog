@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -59,4 +61,26 @@ func categoryID(category *domain.Category) any {
 		return nil
 	}
 	return category.ID
+}
+
+const (
+	objectTagsTable       = "object_tags"
+	remoteObjectTagsTable = "remote_object_tags"
+)
+
+// replaceTagsIn swaps the tags of objectID inside the caller's transaction.
+// The table argument selects the local or the mirrored tag table and must be
+// one of the package constants; it is interpolated into SQL, never bound.
+func replaceTagsIn(ctx context.Context, tx *sql.Tx, table, objectID string, tags []string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE object_id = ?`, objectID); err != nil {
+		return mapError(err)
+	}
+	for _, tag := range tags {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO `+table+` (object_id, tag) VALUES (?, ?)`, objectID, tag,
+		); err != nil {
+			return mapError(err)
+		}
+	}
+	return nil
 }

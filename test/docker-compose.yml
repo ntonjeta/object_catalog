@@ -1,0 +1,66 @@
+# Two-instance federation test environment (test only — weak passwords, plain HTTP).
+#
+# bring up:   docker compose -f test/docker-compose.yml up --build -d
+# logs:       docker compose -f test/docker-compose.yml logs -f alpha beta
+# tear down:  docker compose -f test/docker-compose.yml down            # add -v to wipe DBs
+# seed data:  ./test/load-seeds.sh   # alpha <- test/seed-alpha.xlsx, beta <- test/seed-beta.xlsx
+#
+# BASE_URL is the in-network origin, so alpha and beta resolve each other
+# by service name; host ports are published for browsing the admin UI.
+#
+# Verify federation by hand (from inside alpha):
+#   docker compose -f test/docker-compose.yml exec alpha sh
+#   curl -s http://beta:8080/.well-known/webfinger?resource=acct:catalog@beta
+#   curl -s -H 'Accept: application/activity+json' http://beta:8080/ap/actors/catalog
+#
+# Note: following is protocol-only. A Follow must be *signed* with the
+# follower's key (generated inside alpha's/beta's DB) — no CLI exists yet,
+# so drive it from code or a running instance, not curl.
+
+x-instance: &instance
+  restart: unless-stopped
+  # seed admin once per DB; harmless no-op afterwards
+  entrypoint: ["/bin/sh", "-c", "/usr/local/bin/server create-admin -email \"$$ADMIN_EMAIL\" || true; exec /usr/local/bin/server serve"]
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/categories"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+
+services:
+  alpha:
+    <<: *instance
+    build:
+      context: ..
+    image: biblio-oggetto:test
+    environment:
+      BASE_URL: http://alpha:8080
+      DB_PATH: /data/catalog.db
+      UPLOAD_DIR: /data/static
+      ADMIN_PASSWORD: alpha12345
+      ADMIN_EMAIL: admin@alpha.example
+    volumes:
+      - alpha-data:/data
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  beta:
+    <<: *instance
+    image: biblio-oggetto:test
+    depends_on:
+      alpha:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://beta:8080
+      DB_PATH: /data/catalog.db
+      UPLOAD_DIR: /data/static
+      ADMIN_PASSWORD: beta12345
+      ADMIN_EMAIL: admin@beta.example
+    volumes:
+      - beta-data:/data
+    ports:
+      - "127.0.0.1:8082:8080"
+
+volumes:
+  alpha-data:
+  beta-data:

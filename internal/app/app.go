@@ -3,10 +3,14 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"biblio-oggetto/internal/adapter/activitypub"
 	"biblio-oggetto/internal/adapter/filestore"
 	httpapi "biblio-oggetto/internal/adapter/http"
 	"biblio-oggetto/internal/adapter/sqlite"
@@ -15,15 +19,38 @@ import (
 )
 
 const (
-	defaultSessionTTL = 24 * time.Hour
-	defaultUploadDir  = "./static"
+	defaultSessionTTL     = 24 * time.Hour
+	defaultUploadDir      = "./static"
+	defaultFederationPoll = 5 * time.Second
 )
 
 type Config struct {
-	DBPath       string
-	SessionTTL   time.Duration
-	CookieSecure bool
-	UploadDir    string
+	DBPath         string
+	SessionTTL     time.Duration
+	CookieSecure   bool
+	UploadDir      string
+	BaseURL        string
+	FederationPoll time.Duration
+}
+
+func validateBaseURL(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("BASE_URL is required: the instance origin must be configured for federation")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse BASE_URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("BASE_URL must use the http or https scheme, got %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return "", errors.New("BASE_URL must include a host")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("BASE_URL must not include a query or fragment")
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 type App struct {
@@ -32,6 +59,10 @@ type App struct {
 	Auth       *usecase.Auth
 	Objects    *usecase.Objects
 	Categories *usecase.Categories
+	Identity   *usecase.Identity
+	Federation *usecase.Federation
+
+	stopWorker func()
 }
 
 func New(ctx context.Context, cfg Config) (*App, error) {
@@ -43,6 +74,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 	if cfg.UploadDir == "" {
 		cfg.UploadDir = defaultUploadDir
+	}
+	if cfg.FederationPoll <= 0 {
+		cfg.FederationPoll = defaultFederationPoll
+	}
+	baseURL, err := validateBaseURL(cfg.BaseURL)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sqlite.Open(ctx, cfg.DBPath)
@@ -61,25 +99,57 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	objectRepo := sqlite.NewObjectRepo(db)
 	reservationRepo := sqlite.NewReservationRepo(db)
 	activityRepo := sqlite.NewActivityRepo(db)
+	instanceKeyRepo := sqlite.NewInstanceKeyRepo(db)
+	outboxRepo := sqlite.NewOutboxRepo(db)
+	followerRepo := sqlite.NewFollowerRepo(db)
+	inboxRepo := sqlite.NewInboxRepo(db)
+	remoteKeyRepo := sqlite.NewRemoteKeyRepo(db)
+	peerRepo := sqlite.NewPeerRepo(db)
+	remoteObjectRepo := sqlite.NewRemoteObjectRepo(db)
 
 	auth := usecase.NewAuth(users, sessions, cfg.SessionTTL)
 	objects := usecase.NewObjects(objectRepo, categoryRepo, photos, reservationRepo, activityRepo)
 	categories := usecase.NewCategories(categoryRepo)
-	handler := httpapi.New(auth, objects, categories, httpapi.Config{
+	identity := usecase.NewIdentity(instanceKeyRepo, baseURL)
+	remoteActors := activitypub.NewRemoteActors()
+	federation := usecase.NewFederation(outboxRepo, followerRepo, remoteActors, inboxRepo, identity, peerRepo, remoteObjectRepo)
+	verifier := activitypub.NewSignatureVerifier(remoteKeyRepo, remoteActors)
+
+	catalog := httpapi.New(auth, objects, categories, federation, httpapi.Config{
 		CookieSecure: cfg.CookieSecure,
 		UploadDir:    photos.Dir(),
 	}).Handler()
+	federationHandler := activitypub.New(identity, federation, objects, verifier, activitypub.Config{
+		BaseURL: baseURL,
+	}).Handler()
+
+	root := http.NewServeMux()
+	root.Handle("/ap/", federationHandler)
+	root.Handle("/.well-known/", federationHandler)
+	root.Handle("/", catalog)
+
+	deliverer := activitypub.NewDeliverer(federation, identity, cfg.FederationPoll)
+	processor := activitypub.NewInboxProcessor(federation, cfg.FederationPoll)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	go deliverer.Run(workerCtx)
+	go processor.Run(workerCtx)
 
 	return &App{
 		DB:         db,
-		Handler:    handler,
+		Handler:    root,
 		Auth:       auth,
 		Objects:    objects,
 		Categories: categories,
+		Identity:   identity,
+		Federation: federation,
+		stopWorker: stopWorker,
 	}, nil
 }
 
 func (a *App) Close() error {
+	if a.stopWorker != nil {
+		a.stopWorker()
+	}
 	return a.DB.Close()
 }
 

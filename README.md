@@ -27,10 +27,10 @@ Dependencies are pure Go; CGO is not required.
 
 ```bash
 # 1. create the administrator account
-ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
+BASE_URL='http://localhost:8080' ADMIN_PASSWORD='password123' go run ./cmd/server create-admin -email admin@example.com
 
 # 2. run the server
-go run ./cmd/server
+BASE_URL='http://localhost:8080' go run ./cmd/server
 ```
 
 The server listens on `:8080` by default. Open <http://localhost:8080>,
@@ -52,9 +52,13 @@ go build -o server ./cmd/server
 | `UPLOAD_DIR` | `./static` | Root for uploaded photos |
 | `SESSION_TTL` | `24h` | Session lifetime |
 | `COOKIE_SECURE` | `false` | Set the session cookie `Secure` flag |
+| `BASE_URL` | — | Canonical public origin of this instance; required (federation) |
 | `ADMIN_PASSWORD` | — | Required only by `create-admin` |
 
-Set `COOKIE_SECURE=true` when serving over HTTPS.
+Set `COOKIE_SECURE=true` when serving over HTTPS. `BASE_URL` is the absolute
+`http(s)` origin peers use to reach this instance; it seeds the ActivityPub
+actor, WebFinger, and all future federated identifiers. Use `https://` for
+real deployments.
 
 ## HTTP API
 
@@ -78,6 +82,12 @@ Set `COOKIE_SECURE=true` when serving over HTTPS.
 | `PATCH` | `/api/objects/{id}/busy` | admin |
 | `PATCH` | `/api/objects/{id}/reservation` | admin |
 | `DELETE` | `/api/objects/{id}` | admin |
+| `GET` | `/.well-known/webfinger` | public |
+| `GET` | `/ap/actors/{handle}` | public |
+| `POST` | `/ap/inbox` | public |
+| `GET` | `/ap/outbox` | public |
+| `GET` | `/ap/outbox/{id}` | public |
+| `GET` | `/ap/objects/{id}` | public |
 
 `GET /api/objects` accepts `q`, `category`, `tag`, `limit` (max 100), and
 `offset`. Errors use `{"error":{"code":"...","message":"..."}}` with codes
@@ -90,6 +100,8 @@ cmd/server/                 server and create-admin commands
 internal/domain/            models, validation, sentinel errors
 internal/usecase/           business logic and outbound ports
 internal/adapter/http/      HTTP adapter, JSON/multipart, auth middleware
+internal/adapter/activitypub/ ActivityPub federation adapter: actor, inbox/outbox, workers
+internal/httpx/             shared HTTP error envelope and panic recovery
 internal/adapter/sqlite/    SQLite repositories and schema migrations
 internal/adapter/spreadsheet/ XLSX and CSV import parsing
 internal/adapter/filestore/ local photo storage
@@ -113,8 +125,11 @@ upload directory. No third-party services are required.
 
 ## Documentation
 
+- [User guide: federation](docs/users/federation.md)
 - [Specification](docs/spec.md)
 - [ADR-0001: Single-admin catalog with public reads](docs/adr/0001-single-admin-catalog-and-public-reads.md)
+- [ADR-0002: ActivityPub federation with peer instances](docs/adr/0002-federation.md)
+- [ADR-0003: Federation adapter split](docs/adr/0003-federation-adapter-split.md)
 
 ## Contributing
 

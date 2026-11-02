@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/go-fed/httpsig"
 
 	"biblio-oggetto/internal/app"
 )
@@ -29,6 +32,8 @@ type env struct {
 	adminEmail    string
 	adminPassword string
 	uploadRoot    string
+	baseURL       string
+	acctHost      string
 }
 
 type categoryDTO struct {
@@ -63,6 +68,7 @@ type objectDTO struct {
 	ReservedFrom *time.Time       `json:"reserved_from"`
 	Category     *categoryDTO     `json:"category"`
 	Tags         []string         `json:"tags"`
+	Source       string           `json:"source"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
@@ -97,11 +103,19 @@ type errorEnvelope struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	baseURL := "http://" + listener.Addr().String()
 	uploadRoot := filepath.Join(t.TempDir(), "static")
+
 	application, err := app.New(context.Background(), app.Config{
-		DBPath:     filepath.Join(t.TempDir(), "catalog.db"),
-		SessionTTL: time.Hour,
-		UploadDir:  uploadRoot,
+		DBPath:         filepath.Join(t.TempDir(), "catalog.db"),
+		SessionTTL:     time.Hour,
+		UploadDir:      uploadRoot,
+		BaseURL:        baseURL,
+		FederationPoll: 200 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
@@ -115,7 +129,9 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("create admin: %v", err)
 	}
 
-	server := httptest.NewServer(application.Handler)
+	server := httptest.NewUnstartedServer(application.Handler)
+	server.Listener = listener
+	server.Start()
 	t.Cleanup(server.Close)
 
 	jar, err := cookiejar.New(nil)
@@ -131,6 +147,8 @@ func newEnv(t *testing.T) *env {
 		adminEmail:    adminEmail,
 		adminPassword: adminPassword,
 		uploadRoot:    uploadRoot,
+		baseURL:       baseURL,
+		acctHost:      listener.Addr().String(),
 	}
 }
 
@@ -170,6 +188,73 @@ func (e *env) doRaw(client *http.Client, method, path string, payload []byte) (*
 		e.t.Fatalf("read response: %v", err)
 	}
 	return response, data
+}
+
+// signedInboxPostRaw POSTs a raw body to the target's /ap/inbox signed with
+// this instance's federation key, mirroring the Deliverer. When tamper is
+// set the signature is left over the original body while the request carries
+// different bytes.
+func (e *env) signedInboxPostRaw(target *env, body []byte, tamper bool) (*http.Response, []byte) {
+	e.t.Helper()
+	ctx := context.Background()
+	privateKey, keyID, err := e.app.Identity.SigningKey(ctx)
+	if err != nil {
+		e.t.Fatalf("signing key: %v", err)
+	}
+	signer, _, err := httpsig.NewSigner(
+		[]httpsig.Algorithm{httpsig.RSA_SHA256},
+		httpsig.DigestSha256,
+		[]string{httpsig.RequestTarget, "host", "date", "digest"},
+		httpsig.Signature,
+		0,
+	)
+	if err != nil {
+		e.t.Fatalf("create signer: %v", err)
+	}
+	payload := body
+	if tamper {
+		payload = []byte(`{"tampered":true}`)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.server.URL+"/ap/inbox", bytes.NewReader(payload))
+	if err != nil {
+		e.t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/activity+json")
+	request.Header.Set("Host", request.URL.Host)
+	request.Header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
+	if err := signer.SignRequest(privateKey, keyID, request, body); err != nil {
+		e.t.Fatalf("sign request: %v", err)
+	}
+	response, err := e.anonymous.Do(request)
+	if err != nil {
+		e.t.Fatalf("signed inbox post: %v", err)
+	}
+	data, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		e.t.Fatalf("read response: %v", err)
+	}
+	return response, data
+}
+
+func (e *env) signedInboxPost(target *env, activity map[string]any) (*http.Response, []byte) {
+	e.t.Helper()
+	body, err := json.Marshal(activity)
+	if err != nil {
+		e.t.Fatalf("marshal activity: %v", err)
+	}
+	return e.signedInboxPostRaw(target, body, false)
+}
+
+func (e *env) eventually(what string, condition func() bool) {
+	e.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			e.t.Fatalf("timeout waiting for %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func (e *env) login() {

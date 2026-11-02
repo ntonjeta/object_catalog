@@ -27,7 +27,7 @@ func TestObjectRepoImagesRoundTrip(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := repo.Create(ctx, uploaded); err != nil {
+	if err := repo.Create(ctx, uploaded, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("Create uploaded cover: %v", err)
 	}
 	remote := domain.Object{
@@ -37,7 +37,7 @@ func TestObjectRepoImagesRoundTrip(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := repo.Create(ctx, remote); err != nil {
+	if err := repo.Create(ctx, remote, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("Create remote cover: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestObjectRepoImagesRoundTrip(t *testing.T) {
 	}
 
 	// Deleting the object cascades to its image rows.
-	if err := repo.Delete(ctx, uploaded.ID); err != nil {
+	if err := repo.Delete(ctx, uploaded.ID, domain.OutboxEntry{}); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM object_images WHERE object_id = ?`, uploaded.ID).Scan(&count); err != nil {

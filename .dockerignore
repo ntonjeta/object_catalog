@@ -1,0 +1,7 @@
+.git
+e2e
+docs
+test
+*.db
+server
+cmd/server/server

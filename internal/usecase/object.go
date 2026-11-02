@@ -111,7 +111,14 @@ func (uc *Objects) Create(ctx context.Context, input CreateObjectInput) (domain.
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if err := uc.objects.Create(ctx, object); err != nil {
+	entry, err := uc.federationEntry(domain.OutboxCreate, object, now)
+	if err != nil {
+		if uploadedPhoto {
+			uc.deletePhoto(ctx, imageFile)
+		}
+		return domain.Object{}, err
+	}
+	if err := uc.objects.Create(ctx, object, entry); err != nil {
 		if uploadedPhoto {
 			uc.deletePhoto(ctx, imageFile)
 		}
@@ -193,7 +200,12 @@ func (uc *Objects) Update(ctx context.Context, id string, input UpdateObjectInpu
 	}
 	object.Images = images
 	object.UpdatedAt = time.Now().UTC()
-	if err := uc.objects.Update(ctx, object); err != nil {
+	entry, err := uc.federationEntry(domain.OutboxUpdate, object, object.UpdatedAt)
+	if err != nil {
+		uc.deletePhoto(ctx, newImagePath)
+		return domain.Object{}, err
+	}
+	if err := uc.objects.Update(ctx, object, entry); err != nil {
 		uc.deletePhoto(ctx, newImagePath)
 		return domain.Object{}, err
 	}
@@ -257,7 +269,11 @@ func (uc *Objects) AddImages(ctx context.Context, objectID string, uploads []Pho
 	if len(oldImages) == 0 && len(images) > 0 && images[0].FileName != oldImagePath {
 		object.ImagePath = images[0].FileName
 		object.UpdatedAt = time.Now().UTC()
-		if err := uc.objects.Update(ctx, object); err != nil {
+		entry, err := uc.federationEntry(domain.OutboxUpdate, object, object.UpdatedAt)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		if err := uc.objects.Update(ctx, object, entry); err != nil {
 			// The list is committed and references the new files, so they
 			// cannot be discarded here; the cover resyncs on retry.
 			return domain.Object{}, err
@@ -304,7 +320,11 @@ func (uc *Objects) RemoveImage(ctx context.Context, objectID, imageID string) (d
 			object.ImagePath = ""
 		}
 		object.UpdatedAt = time.Now().UTC()
-		if err := uc.objects.Update(ctx, object); err != nil {
+		entry, err := uc.federationEntry(domain.OutboxUpdate, object, object.UpdatedAt)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		if err := uc.objects.Update(ctx, object, entry); err != nil {
 			// The new list is committed; the displaced cover may still be
 			// referenced by the stale cover row, so nothing is deleted.
 			return domain.Object{}, err
@@ -353,7 +373,11 @@ func (uc *Objects) ReorderImages(ctx context.Context, objectID string, orderedID
 	if len(ordered) > 0 && ordered[0].FileName != object.ImagePath {
 		object.ImagePath = ordered[0].FileName
 		object.UpdatedAt = time.Now().UTC()
-		if err := uc.objects.Update(ctx, object); err != nil {
+		entry, err := uc.federationEntry(domain.OutboxUpdate, object, object.UpdatedAt)
+		if err != nil {
+			return domain.Object{}, err
+		}
+		if err := uc.objects.Update(ctx, object, entry); err != nil {
 			return domain.Object{}, err
 		}
 	}
@@ -411,7 +435,11 @@ func (uc *Objects) SetBusy(ctx context.Context, id string, input SetObjectBusyIn
 		}
 	}
 	object.UpdatedAt = now
-	if err := uc.objects.Update(ctx, object); err != nil {
+	entry, err := uc.federationEntry(domain.OutboxUpdate, object, now)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	if err := uc.objects.Update(ctx, object, entry); err != nil {
 		return domain.Object{}, err
 	}
 	activityType := domain.ActivityObjectBusy
@@ -555,9 +583,13 @@ func (uc *Objects) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	entry, err := uc.federationEntry(domain.OutboxDelete, object, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 	// The object_images rows vanish with the object (FK cascade); the use
 	// case owns only the best-effort file cleanup.
-	if err := uc.objects.Delete(ctx, id); err != nil {
+	if err := uc.objects.Delete(ctx, id, entry); err != nil {
 		return err
 	}
 	uc.deletePhoto(ctx, object.ImagePath)
@@ -567,6 +599,16 @@ func (uc *Objects) Delete(ctx context.Context, id string) error {
 		}
 	}
 	return nil
+}
+
+// federationEntry snapshots the object into an outbox entry embedded in the
+// same transaction as the object write.
+func (uc *Objects) federationEntry(kind domain.OutboxKind, object domain.Object, at time.Time) (domain.OutboxEntry, error) {
+	id, err := domain.NewID()
+	if err != nil {
+		return domain.OutboxEntry{}, fmt.Errorf("generate outbox id: %w", err)
+	}
+	return domain.OutboxEntry{ID: id, Kind: kind, Object: object, Published: at}, nil
 }
 
 func (uc *Objects) List(ctx context.Context, input ListObjectsInput) ([]domain.Object, int, error) {

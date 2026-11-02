@@ -67,4 +67,72 @@ var schema = []string{
 		created_at TEXT NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS activities_object_id_idx ON activities(object_id)`,
+	`CREATE TABLE IF NOT EXISTS instance_keys (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		private_pem TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS outbox (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		object_json TEXT NOT NULL DEFAULT '',
+		target TEXT NOT NULL DEFAULT '',
+		follow_id TEXT NOT NULL DEFAULT '',
+		published_at TEXT NOT NULL,
+		delivered_at TEXT,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS outbox_published_at_idx ON outbox(published_at)`,
+	`CREATE INDEX IF NOT EXISTS outbox_pending_idx ON outbox(delivered_at, next_attempt_at)`,
+	`CREATE TABLE IF NOT EXISTS followers (
+		actor_id TEXT PRIMARY KEY,
+		inbox_url TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS inbox_events (
+		id TEXT PRIMARY KEY,
+		sender TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL,
+		actor TEXT NOT NULL DEFAULT '',
+		object_id TEXT NOT NULL DEFAULT '',
+		payload TEXT NOT NULL,
+		received_at TEXT NOT NULL,
+		processed_at TEXT,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS inbox_events_pending_idx ON inbox_events(processed_at, next_attempt_at)`,
+	`CREATE TABLE IF NOT EXISTS remote_keys (
+		key_id TEXT PRIMARY KEY,
+		public_pem TEXT NOT NULL,
+		fetched_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS peers (
+		id TEXT PRIMARY KEY,
+		actor_id TEXT NOT NULL UNIQUE,
+		inbox_url TEXT NOT NULL,
+		follow_activity_id TEXT NOT NULL UNIQUE,
+		state TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS remote_objects (
+		id TEXT PRIMARY KEY,
+		peer_actor_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		image_url TEXT NOT NULL DEFAULT '',
+		busy INTEGER NOT NULL DEFAULT 0,
+		busy_until TEXT,
+		category_name TEXT NOT NULL DEFAULT '',
+		published_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS remote_objects_peer_actor_id_idx ON remote_objects(peer_actor_id)`,
+	`CREATE TABLE IF NOT EXISTS remote_object_tags (
+		object_id TEXT NOT NULL REFERENCES remote_objects(id) ON DELETE CASCADE,
+		tag TEXT NOT NULL,
+		PRIMARY KEY (object_id, tag)
+	)`,
+	`CREATE INDEX IF NOT EXISTS remote_object_tags_tag_idx ON remote_object_tags(tag)`,
 }
