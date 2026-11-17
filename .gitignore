@@ -19,6 +19,7 @@
 coverage.out
 coverage.html
 *.coverprofile
+cmd/server/server
 
 # Environment files
 .env
