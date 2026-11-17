@@ -1,102 +1,271 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Object Catalog</title>
-  <meta name="description" content="Browse and manage the object catalog.">
+  <title>Biblioteca degli Oggetti</title>
+  <meta name="description" content="Rete di biblioteche degli oggetti confederate negli spazi sociali: consulta il catalogo condiviso.">
+  <meta name="theme-color" content="#f6efe3">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="site-header">
     <div class="container header-inner">
-      <a class="brand" href="/" aria-label="Object Catalog home">
-        <span class="brand-mark" aria-hidden="true">OC</span>
-        <span>Object Catalog</span>
+      <a class="brand" href="#" aria-label="Biblioteca degli Oggetti, home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="22" height="22"><path d="M5 26V8h4v18zm6 0V5h4v21zm6.2 0-3-15.6 3.9-.8 3 15.6zM5 28h22v2H5z" fill="currentColor"/></svg>
+        </span>
+        <span class="brand-text">Biblioteca <em>degli Oggetti</em></span>
       </a>
+      <nav class="main-nav" aria-label="Sezioni">
+        <a class="nav-link" href="#" data-view-link="home">Chi siamo</a>
+        <a class="nav-link" href="#catalogo" data-view-link="catalog">Catalogo</a>
+      </nav>
       <div class="auth-area">
-        <button id="login-button" class="button button-primary" type="button">Admin login</button>
+        <button id="login-button" class="button button-ghost button-small" type="button">Area admin</button>
         <div id="user-area" class="user-area" hidden>
           <span id="user-email" class="user-email"></span>
-          <button id="logout-button" class="button button-ghost" type="button">Log out</button>
+          <button id="logout-button" class="button button-ghost button-small" type="button">Esci</button>
         </div>
       </div>
     </div>
   </header>
 
-  <main class="container">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">Public catalog</p>
-        <h1>Browse the collection</h1>
-        <p class="hero-copy">Search objects by name, description, category, or tag. Sign in as admin to manage the catalog.</p>
-      </div>
-      <div class="hero-actions">
-        <button id="import-button" class="button button-ghost" type="button" data-admin-only hidden>Import</button>
-        <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>New object</button>
-      </div>
-    </section>
-
-    <section class="toolbar" aria-label="Search and filters">
-      <label class="field search-field">
-        <span>Search</span>
-        <input id="search-input" type="search" autocomplete="off" placeholder="Name, description, category, tag">
-      </label>
-      <label class="field">
-        <span>Category</span>
-        <select id="category-filter">
-          <option value="">All categories</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Tag</span>
-        <input id="tag-filter" type="search" autocomplete="off" placeholder="e.g. scifi">
-      </label>
-      <button id="clear-filters" class="button button-ghost toolbar-clear" type="button">Clear</button>
-    </section>
-
+  <div class="container status-wrap">
     <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+  </div>
 
-    <section class="catalog" aria-live="polite" aria-busy="false" id="catalog-section">
-      <div id="loading" class="loading" hidden>Loading objects...</div>
-      <div id="empty-state" class="empty" hidden>
-        <h2>No objects found</h2>
-        <p id="empty-message">Try clearing the filters or create the first object.</p>
-      </div>
-      <div id="object-grid" class="object-grid"></div>
-      <nav id="pagination" class="pagination" aria-label="Catalog pages" hidden>
-        <button id="prev-page" class="button button-ghost" type="button">Previous</button>
-        <span id="page-info" class="page-info"></span>
-        <button id="next-page" class="button button-ghost" type="button">Next</button>
-      </nav>
-    </section>
-
-    <section class="reservations-panel" id="reservations-panel" aria-labelledby="reservations-heading" data-admin-only hidden>
-      <div class="section-heading">
-        <div>
-          <h2 id="reservations-heading">Reservations</h2>
-          <p class="muted">Objects with a live reservation, soonest first.</p>
+  <main id="view-home" class="view view-home" data-view="home">
+    <section class="home-hero">
+      <div class="container home-hero-inner">
+        <div class="home-hero-copy">
+          <p class="eyebrow">Rete di biblioteche confederate</p>
+          <h1>Le cose che servono, <span class="highlight">condivise</span>.</h1>
+          <p class="lead">
+            Siamo una rete di biblioteche degli oggetti nate dentro gli spazi sociali.
+            Attrezzi, strumenti, giochi, materiale per eventi: invece di comprarli
+            ognuno per sé, li mettiamo in comune e li prestiamo.
+          </p>
+          <div class="hero-cta">
+            <a class="button button-primary button-large" href="#catalogo">Esplora il catalogo</a>
+            <button class="button button-large" type="button" data-scroll-to="come-funziona">Come funziona</button>
+          </div>
+          <dl class="hero-stats">
+            <div>
+              <dt>Oggetti in catalogo</dt>
+              <dd id="stat-objects">—</dd>
+            </div>
+            <div>
+              <dt>Categorie</dt>
+              <dd id="stat-categories">—</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="home-hero-art" aria-hidden="true">
+          <svg viewBox="0 0 440 400" class="hero-illustration">
+            <circle cx="230" cy="190" r="170" class="art-sun"/>
+            <rect x="40" y="128" width="360" height="12" rx="6" class="art-shelf"/>
+            <rect x="40" y="258" width="360" height="12" rx="6" class="art-shelf"/>
+            <rect x="40" y="364" width="360" height="12" rx="6" class="art-shelf"/>
+            <!-- top shelf: books + lamp -->
+            <rect x="70" y="58" width="22" height="70" rx="3" class="art-green"/>
+            <rect x="96" y="46" width="18" height="82" rx="3" class="art-coral"/>
+            <rect x="118" y="66" width="26" height="62" rx="3" class="art-ink"/>
+            <rect x="150" y="62" width="16" height="70" rx="3" class="art-lilac" transform="rotate(-12 158 128)"/>
+            <path d="M300 128h44l-6-8h-32z" class="art-ink"/>
+            <rect x="318" y="72" width="8" height="50" class="art-ink"/>
+            <path d="M296 40h52l14 40h-80z" class="art-coral"/>
+            <!-- middle shelf: tent + ball -->
+            <path d="M70 258l62-98 62 98z" class="art-green"/>
+            <path d="M132 160v98l-18 0z" class="art-ink" opacity=".25"/>
+            <path d="M122 258l10-34 10 34z" class="art-paper"/>
+            <circle cx="262" cy="222" r="36" class="art-mustard"/>
+            <path d="M228 214c22 6 46 6 68 0M240 196c14 20 14 40 0 58M284 196c-14 20-14 40 0 58" class="art-line"/>
+            <rect x="322" y="196" width="56" height="62" rx="8" class="art-lilac"/>
+            <rect x="338" y="184" width="24" height="14" rx="4" class="art-ink"/>
+            <!-- bottom shelf: toolbox + drill + plant -->
+            <rect x="64" y="310" width="110" height="54" rx="8" class="art-coral"/>
+            <path d="M96 310v-14h46v14" class="art-line-ink"/>
+            <rect x="64" y="328" width="110" height="6" class="art-ink" opacity=".25"/>
+            <path d="M206 316h70a12 12 0 0 1 12 12v4a12 12 0 0 1-12 12h-30l-8 20h-22l6-20h-16z" class="art-ink"/>
+            <rect x="288" y="326" width="30" height="8" rx="2" class="art-mustard"/>
+            <path d="M342 364l-6-34h40l-6 34z" class="art-mustard"/>
+            <path d="M356 330c-4-18-18-24-26-26 6 10 12 20 26 26zm0 0c2-20 14-30 24-32-4 12-10 24-24 32z" class="art-green"/>
+          </svg>
         </div>
       </div>
-      <div id="reservations-list" class="reservations-list"></div>
     </section>
 
-    <section class="categories-panel" aria-labelledby="categories-heading">
-      <div class="section-heading">
-        <div>
-          <h2 id="categories-heading">Categories</h2>
-          <p class="muted">Filter the catalog by category.</p>
+    <section class="home-section" aria-labelledby="chi-siamo">
+      <div class="container">
+        <div class="section-intro">
+          <p class="eyebrow">Chi siamo</p>
+          <h2 id="chi-siamo">Biblioteche autogestite, un catalogo in comune</h2>
+          <p class="lead">
+            Ogni biblioteca vive in uno spazio sociale e si organizza come preferisce.
+            Insieme formiamo una confederazione: condividiamo il catalogo, le buone pratiche
+            e l'idea che le cose durano di più quando passano di mano in mano.
+          </p>
         </div>
-        <button id="new-category-button" class="button" type="button" data-admin-only hidden>Add category</button>
+        <div class="value-grid">
+          <article class="value-card value-card-coral">
+            <span class="value-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="3"/><circle cx="18" cy="7" r="3"/><circle cx="12" cy="18" r="3"/><path d="M8.5 8.8 10.5 15.5M15.5 8.8 13.5 15.5M9 7h6"/></svg>
+            </span>
+            <h3>Confederate</h3>
+            <p>Nessun centro: ogni spazio gestisce la sua biblioteca e sceglie come prestare. Il catalogo ci tiene in rete.</p>
+          </article>
+          <article class="value-card value-card-green">
+            <span class="value-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 9M20 4v5h-5M20 12a8 8 0 0 1-13.7 5.6L4 15M4 20v-5h5"/></svg>
+            </span>
+            <h3>Mutualismo</h3>
+            <p>Un trapano si usa pochi minuti l'anno. Condividerlo riduce sprechi, costi e spazio occupato in casa.</p>
+          </article>
+          <article class="value-card value-card-mustard">
+            <span class="value-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            </span>
+            <h3>Aperte a tutte e tutti</h3>
+            <p>Il catalogo è pubblico: chiunque può consultarlo, vedere cosa c'è e se è disponibile in questo momento.</p>
+          </article>
+        </div>
       </div>
-      <div id="category-list" class="category-list"></div>
+    </section>
+
+    <section class="home-section home-steps" id="come-funziona" aria-labelledby="come-funziona-title">
+      <div class="container">
+        <div class="section-intro">
+          <p class="eyebrow">Come funziona</p>
+          <h2 id="come-funziona-title">Tre passi, niente di complicato</h2>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-number">1</span>
+            <h3>Cerca</h3>
+            <p>Sfoglia il catalogo per categoria o cerca per nome, descrizione e tag.</p>
+          </li>
+          <li class="step">
+            <span class="step-number">2</span>
+            <h3>Controlla la disponibilità</h3>
+            <p>Ogni oggetto mostra se è libero, in prestito o già prenotato per una data.</p>
+          </li>
+          <li class="step">
+            <span class="step-number">3</span>
+            <h3>Passa a trovarci</h3>
+            <p>Vieni nello spazio sociale, prendi in prestito l'oggetto e riportalo quando hai finito.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="home-section">
+      <div class="container">
+        <div class="cta-band">
+          <div>
+            <h2>Cosa ti serve oggi?</h2>
+            <p>Dai un'occhiata a cosa c'è sugli scaffali della rete.</p>
+          </div>
+          <a class="button button-light button-large" href="#catalogo">Vai al catalogo</a>
+        </div>
+      </div>
     </section>
   </main>
 
+  <main id="view-catalog" class="view view-catalog" data-view="catalog" hidden>
+    <div class="container">
+      <section class="catalog-head">
+        <div>
+          <p class="eyebrow">Catalogo condiviso</p>
+          <h1>Cosa c'è sugli scaffali</h1>
+          <p class="muted">Cerca per nome, descrizione, categoria o tag, oppure parti da una categoria.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="import-button" class="button" type="button" data-admin-only hidden>Importa</button>
+          <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>Nuovo oggetto</button>
+        </div>
+      </section>
+
+      <section class="toolbar" aria-label="Ricerca e filtri">
+        <label class="search-field">
+          <span class="visually-hidden">Cerca</span>
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <input id="search-input" type="search" autocomplete="off" placeholder="Cerca un oggetto: trapano, tenda, proiettore…">
+        </label>
+        <label class="field">
+          <span>Categoria</span>
+          <select id="category-filter">
+            <option value="">Tutte le categorie</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Tag</span>
+          <input id="tag-filter" type="search" autocomplete="off" placeholder="es. campeggio">
+        </label>
+        <button id="clear-filters" class="button button-ghost toolbar-clear" type="button">Azzera</button>
+      </section>
+
+      <div id="active-filters" class="active-filters" hidden></div>
+
+      <section id="category-cards-section" class="category-cards-section" aria-labelledby="category-cards-title" hidden>
+        <div class="section-heading">
+          <h2 id="category-cards-title">Sfoglia per categoria</h2>
+        </div>
+        <div id="category-cards" class="category-cards"></div>
+      </section>
+
+      <section class="catalog" aria-live="polite" aria-busy="false" id="catalog-section">
+        <div class="section-heading">
+          <h2 id="results-title">Ultimi arrivi</h2>
+          <span id="results-count" class="results-count"></span>
+        </div>
+        <div id="loading" class="loading" hidden>Caricamento oggetti…</div>
+        <div id="empty-state" class="empty" hidden>
+          <h2>Nessun oggetto trovato</h2>
+          <p id="empty-message">Prova ad azzerare i filtri.</p>
+        </div>
+        <div id="object-grid" class="object-grid"></div>
+        <nav id="pagination" class="pagination" aria-label="Pagine del catalogo" hidden>
+          <button id="prev-page" class="button" type="button">← Precedente</button>
+          <span id="page-info" class="page-info"></span>
+          <button id="next-page" class="button" type="button">Successiva →</button>
+        </nav>
+      </section>
+
+      <section class="admin-panel" id="reservations-panel" aria-labelledby="reservations-heading" data-admin-only hidden>
+        <div class="section-heading">
+          <div>
+            <h2 id="reservations-heading">Prenotazioni</h2>
+            <p class="muted">Oggetti con una prenotazione attiva, dalla più vicina.</p>
+          </div>
+        </div>
+        <div id="reservations-list" class="reservations-list"></div>
+      </section>
+
+      <section class="admin-panel" aria-labelledby="categories-heading" data-admin-only hidden>
+        <div class="section-heading">
+          <div>
+            <h2 id="categories-heading">Gestisci categorie</h2>
+            <p class="muted">Rinomina o elimina le categorie del catalogo.</p>
+          </div>
+          <button id="new-category-button" class="button" type="button">Aggiungi categoria</button>
+        </div>
+        <div id="category-list" class="category-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p><strong>Biblioteca degli Oggetti</strong> · rete confederata di spazi sociali</p>
+      <p class="muted">Prendi, usa, restituisci.</p>
+    </div>
+  </footer>
+
   <dialog id="detail-dialog" class="dialog dialog-detail" aria-labelledby="detail-title">
     <div class="detail-body">
-      <div id="detail-loading" class="detail-loading" hidden>Loading object...</div>
+      <div id="detail-loading" class="detail-loading" hidden>Caricamento oggetto…</div>
       <div id="detail-content" class="detail-content" hidden>
         <div class="detail-head">
           <h2 id="detail-title"></h2>
@@ -104,20 +273,20 @@
         </div>
         <figure class="detail-gallery">
           <div id="detail-stage" class="detail-stage" hidden>
-            <button id="detail-prev" class="button button-ghost detail-arrow detail-arrow-prev" type="button" aria-label="Previous image">‹</button>
+            <button id="detail-prev" class="button detail-arrow detail-arrow-prev" type="button" aria-label="Immagine precedente">‹</button>
             <img id="detail-main-image" class="detail-main-image" alt="">
-            <button id="detail-next" class="button button-ghost detail-arrow detail-arrow-next" type="button" aria-label="Next image">›</button>
+            <button id="detail-next" class="button detail-arrow detail-arrow-next" type="button" aria-label="Immagine successiva">›</button>
           </div>
-          <div id="detail-thumbs" class="detail-thumbs" role="group" aria-label="Object images"></div>
+          <div id="detail-thumbs" class="detail-thumbs" role="group" aria-label="Immagini dell'oggetto"></div>
           <figcaption id="detail-caption" class="detail-caption"></figcaption>
         </figure>
-        <h3>Description</h3>
+        <h3>Descrizione</h3>
         <p id="detail-description" class="detail-description"></p>
         <ul id="detail-tags" class="tag-list"></ul>
         <p id="detail-dates" class="detail-dates muted"></p>
         <div class="dialog-actions">
-          <button id="detail-edit" class="button" type="button" data-admin-only hidden>Edit object</button>
-          <button class="button button-ghost" type="button" data-close-dialog="detail-dialog">Close</button>
+          <button id="detail-edit" class="button" type="button" data-admin-only hidden>Modifica oggetto</button>
+          <button class="button button-ghost" type="button" data-close-dialog="detail-dialog">Chiudi</button>
         </div>
       </div>
     </div>
@@ -126,8 +295,8 @@
   <dialog id="login-dialog" class="dialog" aria-labelledby="login-title">
     <form id="login-form" class="dialog-form">
       <div>
-        <h2 id="login-title">Admin login</h2>
-        <p class="muted">Use the administrator account created with the create-admin command.</p>
+        <h2 id="login-title">Accesso admin</h2>
+        <p class="muted">Usa l'account amministratore creato con il comando create-admin.</p>
       </div>
       <label class="field">
         <span>Email</span>
@@ -139,8 +308,8 @@
       </label>
       <p id="login-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="login-dialog">Cancel</button>
-        <button class="button button-primary" type="submit">Log in</button>
+        <button class="button button-ghost" type="button" data-close-dialog="login-dialog">Annulla</button>
+        <button class="button button-primary" type="submit">Accedi</button>
       </div>
     </form>
   </dialog>
@@ -148,51 +317,51 @@
   <dialog id="object-dialog" class="dialog" aria-labelledby="object-dialog-title">
     <form id="object-form" class="dialog-form">
       <div>
-        <h2 id="object-dialog-title">New object</h2>
-        <p class="muted">Name is required. Tags are comma-separated.</p>
+        <h2 id="object-dialog-title">Nuovo oggetto</h2>
+        <p class="muted">Il nome è obbligatorio. I tag sono separati da virgole.</p>
       </div>
       <input id="object-id" type="hidden">
       <label class="field">
-        <span>Name</span>
+        <span>Nome</span>
         <input id="object-name" name="name" type="text" maxlength="200" required>
       </label>
       <label class="field">
-        <span>Description</span>
+        <span>Descrizione</span>
         <textarea id="object-description" name="description" rows="4" maxlength="5000"></textarea>
       </label>
       <label class="field">
-        <span>Category</span>
+        <span>Categoria</span>
         <select id="object-category" name="category">
-          <option value="">No category</option>
+          <option value="">Nessuna categoria</option>
         </select>
       </label>
       <label class="field">
-        <span>Photo</span>
+        <span>Foto di copertina</span>
         <input id="object-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
-        <small class="field-hint">JPEG, PNG, or WebP, up to 5 MB.</small>
+        <small class="field-hint">JPEG, PNG o WebP, massimo 5 MB.</small>
       </label>
       <div id="object-photo-preview-wrap" class="photo-preview-wrap" hidden>
-        <img id="object-photo-preview" class="photo-preview" alt="Photo preview">
+        <img id="object-photo-preview" class="photo-preview" alt="Anteprima foto">
         <label class="checkbox">
           <input id="object-remove-photo" type="checkbox">
-          <span>Remove photo</span>
+          <span>Rimuovi foto</span>
         </label>
       </div>
       <label class="field">
-        <span>Additional images</span>
+        <span>Altre immagini</span>
         <input id="object-images" name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
-        <small class="field-hint">Up to 10 total, each ≤5 MB.</small>
+        <small class="field-hint">Fino a 10 in totale, ciascuna ≤ 5 MB.</small>
       </label>
       <div id="object-images-strip" class="image-strip" hidden></div>
       <label class="field">
-        <span>Tags</span>
-        <input id="object-tags" name="tags" type="text" placeholder="scifi, classic, sequel">
-        <small class="field-hint">Comma-separated; up to 20 tags.</small>
+        <span>Tag</span>
+        <input id="object-tags" name="tags" type="text" placeholder="campeggio, estate, bricolage">
+        <small class="field-hint">Separati da virgole; massimo 20 tag.</small>
       </label>
       <p id="object-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="object-dialog">Cancel</button>
-        <button id="object-save" class="button button-primary" type="submit">Save object</button>
+        <button class="button button-ghost" type="button" data-close-dialog="object-dialog">Annulla</button>
+        <button id="object-save" class="button button-primary" type="submit">Salva oggetto</button>
       </div>
     </form>
   </dialog>
@@ -200,18 +369,18 @@
   <dialog id="busy-dialog" class="dialog" aria-labelledby="busy-dialog-title">
     <form id="busy-form" class="dialog-form">
       <div>
-        <h2 id="busy-dialog-title">Mark object busy</h2>
-        <p class="muted">The object is unavailable until the selected time, or from the selected start when reserving.</p>
+        <h2 id="busy-dialog-title">Segna come in prestito</h2>
+        <p class="muted">L'oggetto resta non disponibile fino alla data scelta.</p>
       </div>
       <input id="busy-object-id" type="hidden">
       <label class="field">
-        <span>Busy until</span>
+        <span>In prestito fino al</span>
         <input id="busy-until" name="busy_until" type="datetime-local" required>
       </label>
       <p id="busy-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="busy-dialog">Cancel</button>
-        <button id="busy-save" class="button button-primary" type="submit">Mark busy</button>
+        <button class="button button-ghost" type="button" data-close-dialog="busy-dialog">Annulla</button>
+        <button id="busy-save" class="button button-primary" type="submit">Segna in prestito</button>
       </div>
     </form>
   </dialog>
@@ -219,22 +388,22 @@
   <dialog id="reserve-dialog" class="dialog" aria-labelledby="reserve-dialog-title">
     <form id="reserve-form" class="dialog-form">
       <div>
-        <h2 id="reserve-dialog-title">Reserve object</h2>
-        <p class="muted">The object stays lendable until the reservation starts.</p>
+        <h2 id="reserve-dialog-title">Prenota oggetto</h2>
+        <p class="muted">L'oggetto resta prestabile fino all'inizio della prenotazione.</p>
       </div>
       <input id="reserve-object-id" type="hidden">
       <label class="field">
-        <span>Reserved from</span>
+        <span>Prenotato dal</span>
         <input id="reserve-from" name="from" type="datetime-local" required>
       </label>
       <label class="field">
-        <span>Reserved until (optional)</span>
+        <span>Prenotato fino al (facoltativo)</span>
         <input id="reserve-until" name="until" type="datetime-local">
       </label>
       <p id="reserve-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="reserve-dialog">Cancel</button>
-        <button id="reserve-save" class="button button-primary" type="submit">Reserve</button>
+        <button class="button button-ghost" type="button" data-close-dialog="reserve-dialog">Annulla</button>
+        <button id="reserve-save" class="button button-primary" type="submit">Prenota</button>
       </div>
     </form>
   </dialog>
@@ -242,23 +411,23 @@
   <dialog id="import-dialog" class="dialog" aria-labelledby="import-dialog-title">
     <form id="import-form" class="dialog-form">
       <div>
-        <h2 id="import-dialog-title">Import objects</h2>
+        <h2 id="import-dialog-title">Importa oggetti</h2>
         <p class="muted">
-          Upload an .xlsx or CSV file. Required column: <strong>name</strong>. Optional columns:
-          <strong>description</strong>, <strong>category</strong>, <strong>tags</strong>, and
+          Carica un file .xlsx o CSV. Colonna obbligatoria: <strong>name</strong>. Colonne facoltative:
+          <strong>description</strong>, <strong>category</strong>, <strong>tags</strong> e
           <strong>photo_url</strong>.
         </p>
       </div>
       <label class="field">
         <span>File</span>
         <input id="import-file" name="file" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
-        <small class="field-hint">Tags are comma-separated. Missing categories are created automatically. Existing names are updated.</small>
+        <small class="field-hint">Tag separati da virgole. Le categorie mancanti vengono create. I nomi esistenti vengono aggiornati.</small>
       </label>
       <div id="import-result" class="import-result" role="status" aria-live="polite" hidden></div>
       <p id="import-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="import-dialog">Close</button>
-        <button id="import-save" class="button button-primary" type="submit">Import</button>
+        <button class="button button-ghost" type="button" data-close-dialog="import-dialog">Chiudi</button>
+        <button id="import-save" class="button button-primary" type="submit">Importa</button>
       </div>
     </form>
   </dialog>
@@ -266,18 +435,18 @@
   <dialog id="category-dialog" class="dialog" aria-labelledby="category-dialog-title">
     <form id="category-form" class="dialog-form">
       <div>
-        <h2 id="category-dialog-title">New category</h2>
-        <p class="muted">Category names are unique.</p>
+        <h2 id="category-dialog-title">Nuova categoria</h2>
+        <p class="muted">I nomi delle categorie sono unici.</p>
       </div>
       <input id="category-id" type="hidden">
       <label class="field">
-        <span>Name</span>
+        <span>Nome</span>
         <input id="category-name" name="name" type="text" maxlength="100" required>
       </label>
       <p id="category-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="category-dialog">Cancel</button>
-        <button id="category-save" class="button button-primary" type="submit">Save category</button>
+        <button class="button button-ghost" type="button" data-close-dialog="category-dialog">Annulla</button>
+        <button id="category-save" class="button button-primary" type="submit">Salva categoria</button>
       </div>
     </form>
   </dialog>
