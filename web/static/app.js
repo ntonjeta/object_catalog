@@ -89,6 +89,15 @@ busyDialog: document.getElementById("busy-dialog"),
     detailTags: document.getElementById("detail-tags"),
     detailDates: document.getElementById("detail-dates"),
     detailEdit: document.getElementById("detail-edit"),
+    views: document.querySelectorAll("[data-view]"),
+    viewLinks: document.querySelectorAll("[data-view-link]"),
+    activeFilters: document.getElementById("active-filters"),
+    categoryCardsSection: document.getElementById("category-cards-section"),
+    categoryCards: document.getElementById("category-cards"),
+    resultsTitle: document.getElementById("results-title"),
+    resultsCount: document.getElementById("results-count"),
+    statObjects: document.getElementById("stat-objects"),
+    statCategories: document.getElementById("stat-categories"),
   };
 
   const state = {
@@ -110,6 +119,9 @@ busyDialog: document.getElementById("busy-dialog"),
     detailImages: [],
     detailIndex: 0,
     detailRequestId: 0,
+    view: "",
+    categoryStats: new Map(),
+    statsRequestId: 0,
   };
 
   let statusTimer;
@@ -161,7 +173,7 @@ busyDialog: document.getElementById("busy-dialog"),
     try {
       response = await fetch(path, init);
     } catch (cause) {
-      const error = new Error("Network error. Is the server running?");
+      const error = new Error("Errore di rete. Il server è in esecuzione?");
       error.cause = cause;
       throw error;
     }
@@ -181,7 +193,7 @@ busyDialog: document.getElementById("busy-dialog"),
     }
 
     if (!response.ok) {
-      const message = payload?.error?.message || `Request failed (${response.status}).`;
+      const message = payload?.error?.message || `Richiesta non riuscita (${response.status}).`;
       const error = new Error(message);
       error.status = response.status;
       error.code = payload?.error?.code;
@@ -258,7 +270,7 @@ busyDialog: document.getElementById("busy-dialog"),
     if (Number.isNaN(date.getTime())) {
       return "";
     }
-    return date.toLocaleDateString(undefined, {
+    return date.toLocaleDateString("it-IT", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -281,6 +293,42 @@ busyDialog: document.getElementById("busy-dialog"),
       }
     }
     return tags;
+  }
+
+  // Categories cycle through the palette in list order so neighbours differ;
+  // other names fall back to a stable hash.
+  function toneFor(name) {
+    const index = state.categories.findIndex((category) => category.name === name);
+    if (index >= 0) {
+      return String(index % 5);
+    }
+    let hash = 0;
+    for (const char of String(name)) {
+      hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+    }
+    return String(hash % 5);
+  }
+
+  function initialOf(name) {
+    const first = String(name).trim()[0];
+    return first ? first.toUpperCase() : "?";
+  }
+
+  function plural(count, one, many) {
+    return `${count} ${count === 1 ? one : many}`;
+  }
+
+  function availabilityBadge(object) {
+    if (object.busy) {
+      const label = object.busy_until
+        ? `In prestito fino al ${formatDate(object.busy_until)}`
+        : "In prestito";
+      return el("span", "busy-badge", label);
+    }
+    if (object.reserved_from) {
+      return el("span", "reserved-badge", `Prenotato dal ${formatDate(object.reserved_from)}`);
+    }
+    return el("span", "available-badge", "Disponibile");
   }
 
   function hidePhotoImage() {
@@ -345,7 +393,7 @@ busyDialog: document.getElementById("busy-dialog"),
       const tile = el("div", "image-tile");
       const thumb = el("img", "image-thumb");
       thumb.src = image.url;
-      thumb.alt = "Catalog image";
+      thumb.alt = "Immagine dell'oggetto";
       thumb.loading = "lazy";
       thumb.decoding = "async";
       thumb.addEventListener("error", () => thumb.remove());
@@ -356,20 +404,20 @@ busyDialog: document.getElementById("busy-dialog"),
       removeButton.type = "button";
       removeButton.dataset.action = "remove-image";
       removeButton.dataset.imageId = image.id;
-      removeButton.setAttribute("aria-label", "Remove image");
+      removeButton.setAttribute("aria-label", "Rimuovi immagine");
       const leftButton = el("button", "button button-ghost button-small", "←");
       leftButton.type = "button";
       leftButton.dataset.action = "move-image";
       leftButton.dataset.imageId = image.id;
       leftButton.dataset.delta = "-1";
-      leftButton.setAttribute("aria-label", "Move image earlier");
+      leftButton.setAttribute("aria-label", "Sposta prima");
       leftButton.disabled = index === 0;
       const rightButton = el("button", "button button-ghost button-small", "→");
       rightButton.type = "button";
       rightButton.dataset.action = "move-image";
       rightButton.dataset.imageId = image.id;
       rightButton.dataset.delta = "1";
-      rightButton.setAttribute("aria-label", "Move image later");
+      rightButton.setAttribute("aria-label", "Sposta dopo");
       rightButton.disabled = index === state.editingObjectImages.length - 1;
       actions.append(removeButton, leftButton, rightButton);
       tile.append(actions);
@@ -380,7 +428,7 @@ busyDialog: document.getElementById("busy-dialog"),
       const tile = el("div", "image-tile");
       const thumb = el("img", "image-thumb");
       thumb.src = url;
-      thumb.alt = "Pending upload preview";
+      thumb.alt = "Anteprima caricamento";
       tile.append(thumb);
 
       const actions = el("div", "image-tile-actions");
@@ -388,7 +436,7 @@ busyDialog: document.getElementById("busy-dialog"),
       removeButton.type = "button";
       removeButton.dataset.action = "remove-pending";
       removeButton.dataset.index = String(index);
-      removeButton.setAttribute("aria-label", "Remove pending upload");
+      removeButton.setAttribute("aria-label", "Rimuovi caricamento");
       actions.append(removeButton);
       tile.append(actions);
       elements.objectImagesStrip.append(tile);
@@ -461,7 +509,7 @@ busyDialog: document.getElementById("busy-dialog"),
 
   function populateCategorySelects() {
     const selectedFilter = state.filters.category;
-    elements.categoryFilter.replaceChildren(option("", "All categories"));
+    elements.categoryFilter.replaceChildren(option("", "Tutte le categorie"));
     for (const category of state.categories) {
       elements.categoryFilter.append(option(category.name, category.name));
     }
@@ -472,7 +520,7 @@ busyDialog: document.getElementById("busy-dialog"),
     }
 
     const selectedObjectCategory = elements.objectCategory.value;
-    elements.objectCategory.replaceChildren(option("", "No category"));
+    elements.objectCategory.replaceChildren(option("", "Nessuna categoria"));
     for (const category of state.categories) {
       elements.objectCategory.append(option(category.id, category.name));
     }
@@ -486,7 +534,7 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.categoryList.replaceChildren();
     if (state.categories.length === 0) {
       elements.categoryList.append(
-        el("p", "muted", "No categories yet. An administrator can add one."),
+        el("p", "muted", "Nessuna categoria. Aggiungine una."),
       );
       applyAdminVisibility();
       return;
@@ -505,16 +553,16 @@ busyDialog: document.getElementById("busy-dialog"),
 
       const actions = el("span", "category-actions");
       actions.dataset.adminOnly = "";
-      const editButton = el("button", "button button-ghost button-small", "Rename");
+      const editButton = el("button", "button button-ghost button-small", "Rinomina");
       editButton.type = "button";
       editButton.dataset.action = "edit-category";
       editButton.dataset.id = category.id;
-      editButton.setAttribute("aria-label", `Rename ${category.name}`);
-      const deleteButton = el("button", "button button-danger button-small", "Delete");
+      editButton.setAttribute("aria-label", `Rinomina ${category.name}`);
+      const deleteButton = el("button", "button button-danger button-small", "Elimina");
       deleteButton.type = "button";
       deleteButton.dataset.action = "delete-category";
       deleteButton.dataset.id = category.id;
-      deleteButton.setAttribute("aria-label", `Delete ${category.name}`);
+      deleteButton.setAttribute("aria-label", `Elimina ${category.name}`);
       actions.append(editButton, deleteButton);
       chip.append(actions);
       elements.categoryList.append(chip);
@@ -528,10 +576,10 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.emptyState.hidden = !empty;
     if (empty) {
       elements.emptyMessage.textContent = hasFilters()
-        ? "Try clearing the filters."
+        ? "Prova ad azzerare i filtri o a cercare qualcos'altro."
         : state.user
-          ? "Create the first object to get started."
-          : "The catalog is empty. An administrator can add objects.";
+          ? "Crea il primo oggetto per iniziare."
+          : "Il catalogo è ancora vuoto.";
       applyAdminVisibility();
       return;
     }
@@ -542,91 +590,90 @@ busyDialog: document.getElementById("busy-dialog"),
       card.dataset.id = object.id;
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      card.setAttribute("aria-label", `View details for ${object.name}`);
+      card.setAttribute("aria-label", `Dettagli di ${object.name}`);
 
-      const top = el("div", "card-top");
-      top.append(el("h3", "", object.name));
-      if (object.category) {
-        top.append(el("span", "category-badge", object.category.name));
-      }
-      if (object.busy) {
-        const label = object.busy_until
-          ? `Unavailable until ${formatDate(object.busy_until)}`
-          : "Unavailable";
-        top.append(el("span", "busy-badge", label));
-      } else if (object.reserved_from) {
-        top.append(el("span", "reserved-badge", `Reserved from ${formatDate(object.reserved_from)}`));
-      }
-
-      const description = el(
-        "p",
-        object.description ? "card-description" : "card-description is-empty",
-        object.description || "No description.",
-      );
-
-      card.append(top);
+      const media = el("div", "object-media");
+      media.dataset.tone = toneFor(object.category ? object.category.name : object.name);
+      media.append(el("span", "object-media-letter", initialOf(object.name)));
       if (object.image_path) {
         const photo = el("img", "object-photo");
         photo.src = object.image_path;
-        photo.alt = `Photo of ${object.name}`;
+        photo.alt = `Foto di ${object.name}`;
         photo.loading = "lazy";
         photo.decoding = "async";
         photo.addEventListener("error", () => photo.remove());
-        card.append(photo);
+        media.append(photo);
       }
-      card.append(description);
+      const badge = availabilityBadge(object);
+      badge.classList.add("availability");
+      media.append(badge);
+      card.append(media);
+
+      const body = el("div", "object-body");
+      if (object.category) {
+        body.append(el("span", "card-category", object.category.name));
+      }
+      body.append(el("h3", "", object.name));
+      body.append(
+        el(
+          "p",
+          object.description ? "card-description" : "card-description is-empty",
+          object.description || "Nessuna descrizione.",
+        ),
+      );
 
       if (object.tags.length > 0) {
         const tags = el("ul", "tag-list");
         for (const tag of object.tags) {
           tags.append(el("li", "tag", tag));
         }
-        card.append(tags);
+        body.append(tags);
       }
 
       const footer = el("div", "card-footer");
-      const date = el("time", "card-date", `Added ${formatDate(object.created_at)}`);
+      const date = el("time", "card-date", `Aggiunto il ${formatDate(object.created_at)}`);
       date.dateTime = object.created_at;
       footer.append(date);
 
       const actions = el("div", "card-actions");
       actions.dataset.adminOnly = "";
-      const editButton = el("button", "button button-ghost button-small", "Edit");
+      const editButton = el("button", "button button-ghost button-small", "Modifica");
       editButton.type = "button";
       editButton.dataset.action = "edit-object";
       editButton.dataset.id = object.id;
-      editButton.setAttribute("aria-label", `Edit ${object.name}`);
+      editButton.setAttribute("aria-label", `Modifica ${object.name}`);
       const taken = object.busy;
       const busyButton = el(
         "button",
         "button button-ghost button-small",
-        taken ? "Release" : "Mark busy",
+        taken ? "Restituito" : "In prestito",
       );
       busyButton.type = "button";
       busyButton.dataset.action = taken ? "release-object" : "busy-object";
       busyButton.dataset.id = object.id;
       busyButton.setAttribute(
         "aria-label",
-        taken ? `Release ${object.name}` : `Mark ${object.name} busy`,
+        taken ? `Segna ${object.name} come restituito` : `Segna ${object.name} in prestito`,
       );
       const reserveButton = el(
         "button",
         "button button-ghost button-small",
-        object.reserved_from ? "Change reservation" : "Reserve",
+        object.reserved_from ? "Cambia prenotazione" : "Prenota",
       );
       reserveButton.type = "button";
       reserveButton.dataset.action = "reserve-object";
       reserveButton.dataset.id = object.id;
-      reserveButton.setAttribute("aria-label", `Reserve ${object.name}`);
-      const deleteButton = el("button", "button button-danger button-small", "Delete");
+      reserveButton.setAttribute("aria-label", `Prenota ${object.name}`);
+      const deleteButton = el("button", "button button-danger button-small", "Elimina");
       deleteButton.type = "button";
       deleteButton.dataset.action = "delete-object";
       deleteButton.dataset.id = object.id;
-      deleteButton.setAttribute("aria-label", `Delete ${object.name}`);
+      deleteButton.setAttribute("aria-label", `Elimina ${object.name}`);
       actions.append(editButton, busyButton, reserveButton, deleteButton);
       footer.append(actions);
 
-      card.append(footer);
+      body.append(footer);
+      card.append(body);
       elements.objectGrid.append(card);
     }
     applyAdminVisibility();
@@ -639,11 +686,117 @@ busyDialog: document.getElementById("busy-dialog"),
     }
     const pages = Math.max(1, Math.ceil(state.total / state.limit));
     const page = Math.floor(state.offset / state.limit) + 1;
-    const noun = state.total === 1 ? "object" : "objects";
-    elements.pageInfo.textContent = `Page ${page} of ${pages} - ${state.total} ${noun}`;
+    elements.pageInfo.textContent = `Pagina ${page} di ${pages}`;
     elements.prevPage.disabled = state.offset === 0;
     elements.nextPage.disabled = state.offset + state.limit >= state.total;
-    elements.pagination.hidden = false;
+    elements.pagination.hidden = pages < 2;
+  }
+
+  function renderResultsHeading() {
+    const { q, category, tag } = state.filters;
+    let title = "Ultimi arrivi";
+    if (category && !q && !tag) {
+      title = category;
+    } else if (hasFilters()) {
+      title = "Risultati";
+    }
+    elements.resultsTitle.textContent = title;
+    elements.resultsCount.textContent = plural(state.total, "oggetto", "oggetti");
+  }
+
+  function filterChip(label, key) {
+    const chip = el("button", "filter-chip");
+    chip.type = "button";
+    chip.dataset.clear = key;
+    chip.setAttribute("aria-label", `Rimuovi filtro ${label}`);
+    chip.append(el("span", "", label), el("span", "filter-chip-x", "✕"));
+    return chip;
+  }
+
+  function renderActiveFilters() {
+    const { q, category, tag } = state.filters;
+    elements.activeFilters.replaceChildren();
+    elements.activeFilters.hidden = !hasFilters();
+    if (!hasFilters()) {
+      return;
+    }
+    elements.activeFilters.append(el("span", "active-filters-label", "Filtri:"));
+    if (category) {
+      elements.activeFilters.append(filterChip(`Categoria: ${category}`, "category"));
+    }
+    if (q) {
+      elements.activeFilters.append(filterChip(`“${q}”`, "q"));
+    }
+    if (tag) {
+      elements.activeFilters.append(filterChip(`#${tag}`, "tag"));
+    }
+  }
+
+  // Category cards are the catalog's landing view; they step aside once a filter is set.
+  function renderCategoryCards() {
+    elements.categoryCards.replaceChildren();
+    elements.categoryCardsSection.hidden = hasFilters() || state.categories.length === 0;
+    for (const category of state.categories) {
+      const stats = state.categoryStats.get(category.name);
+      const card = el("button", "category-card");
+      card.type = "button";
+      card.dataset.name = category.name;
+      card.dataset.tone = toneFor(category.name);
+      if (stats && stats.cover) {
+        card.classList.add("has-image");
+        const image = el("img", "category-card-image");
+        image.src = stats.cover;
+        image.alt = "";
+        image.loading = "lazy";
+        image.decoding = "async";
+        image.addEventListener("error", () => {
+          image.remove();
+          card.classList.remove("has-image");
+        });
+        card.append(image);
+      } else {
+        card.append(el("span", "category-card-letter", initialOf(category.name)));
+      }
+      const body = el("span", "category-card-body");
+      body.append(el("span", "category-card-name", category.name));
+      body.append(
+        el("span", "category-card-count", stats ? plural(stats.total, "oggetto", "oggetti") : " "),
+      );
+      card.append(body);
+      elements.categoryCards.append(card);
+    }
+  }
+
+  // One small query per category yields its object count and its newest cover.
+  async function loadCategoryStats() {
+    const requestId = ++state.statsRequestId;
+    const categories = state.categories.slice();
+    const results = await Promise.all(
+      categories.map(async (category) => {
+        const params = new URLSearchParams({ category: category.name, limit: "12" });
+        try {
+          const data = await api(`/api/objects?${params.toString()}`);
+          const withCover = data.objects.find((object) => object.image_path);
+          return [category.name, { total: data.total, cover: withCover ? withCover.image_path : "" }];
+        } catch {
+          return null;
+        }
+      }),
+    );
+    if (requestId !== state.statsRequestId) {
+      return;
+    }
+    state.categoryStats = new Map(results.filter(Boolean));
+    renderCategoryCards();
+  }
+
+  function applyCategoryFilter(name) {
+    state.filters.category = name;
+    state.offset = 0;
+    elements.categoryFilter.value = name;
+    renderCategories();
+    loadObjects();
+    elements.catalogSection.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function setLoading(loading) {
@@ -668,8 +821,11 @@ busyDialog: document.getElementById("busy-dialog"),
     try {
       const data = await api("/api/categories");
       state.categories = data.categories;
+      elements.statCategories.textContent = String(state.categories.length);
       populateCategorySelects();
       renderCategories();
+      renderCategoryCards();
+      loadCategoryStats();
     } catch (error) {
       showStatus(error.message, "error");
     }
@@ -701,6 +857,10 @@ busyDialog: document.getElementById("busy-dialog"),
       state.total = data.total;
       renderObjects();
       renderPagination();
+      if (!hasFilters()) {
+        elements.statObjects.textContent = String(data.total);
+        loadCategoryStats();
+      }
     } catch (error) {
       if (requestId !== state.requestId) {
         return;
@@ -713,6 +873,9 @@ busyDialog: document.getElementById("busy-dialog"),
     } finally {
       if (requestId === state.requestId) {
         setLoading(false);
+        renderResultsHeading();
+        renderActiveFilters();
+        renderCategoryCards();
         loadReservations();
       }
     }
@@ -732,13 +895,13 @@ busyDialog: document.getElementById("busy-dialog"),
       reserved = data.objects.filter((object) => object.reservation);
     } catch (error) {
       elements.reservationsList.replaceChildren(
-        el("p", "muted", `Could not load reservations: ${error.message}`),
+        el("p", "muted", `Impossibile caricare le prenotazioni: ${error.message}`),
       );
       return;
     }
     if (reserved.length === 0) {
       elements.reservationsList.replaceChildren(
-        el("p", "muted", "No active reservations."),
+        el("p", "muted", "Nessuna prenotazione attiva."),
       );
       return;
     }
@@ -750,17 +913,17 @@ busyDialog: document.getElementById("busy-dialog"),
       const period = el(
         "span",
         "reservation-window",
-        `${formatDate(object.reservation.from)} → ${object.reservation.until ? formatDate(object.reservation.until) : "open ended"}`,
+        `${formatDate(object.reservation.from)} → ${object.reservation.until ? formatDate(object.reservation.until) : "senza scadenza"}`,
       );
       info.append(period);
       row.append(info);
       const status = el("span", "reservation-status", object.reservation.status);
       row.append(status);
-      const button = el("button", "button button-ghost button-small", "Change");
+      const button = el("button", "button button-ghost button-small", "Modifica");
       button.type = "button";
       button.dataset.action = "reserve-object";
       button.dataset.id = object.id;
-      button.setAttribute("aria-label", `Change reservation for ${object.name}`);
+      button.setAttribute("aria-label", `Modifica la prenotazione di ${object.name}`);
       row.append(button);
       return row;
     });
@@ -779,7 +942,7 @@ busyDialog: document.getElementById("busy-dialog"),
   function handleFormError(error, target, dialog) {
     if (error.status === 401) {
       closeDialog(dialog);
-      openLogin("Please sign in to continue.");
+      openLogin("Accedi per continuare.");
       return;
     }
     showFormError(target, error.message);
@@ -787,7 +950,7 @@ busyDialog: document.getElementById("busy-dialog"),
 
   function handleActionError(error) {
     if (error.status === 401) {
-      openLogin("Please sign in to continue.");
+      openLogin("Accedi per continuare.");
       return;
     }
     showStatus(error.message, "error");
@@ -797,8 +960,8 @@ busyDialog: document.getElementById("busy-dialog"),
     state.editingObjectId = null;
     elements.objectForm.reset();
     elements.objectId.value = "";
-    elements.objectDialogTitle.textContent = "New object";
-    elements.objectSave.textContent = "Create object";
+    elements.objectDialogTitle.textContent = "Nuovo oggetto";
+    elements.objectSave.textContent = "Crea oggetto";
     elements.objectPhoto.value = "";
     elements.objectRemovePhoto.checked = false;
     clearPhotoPreview();
@@ -821,18 +984,17 @@ busyDialog: document.getElementById("busy-dialog"),
 
   function renderImportResult(result) {
     elements.importResult.replaceChildren();
-    const noun = result.failed === 1 ? "failure" : "failures";
-    elements.importResult.append(
+        elements.importResult.append(
       el(
         "p",
         "",
-        `Created ${result.created}, updated ${result.updated}, failed ${result.failed} ${noun}.`,
+        `Creati ${result.created}, aggiornati ${result.updated}, falliti ${result.failed}.`,
       ),
     );
     if (result.failures.length > 0) {
       const list = el("ul", "import-failures");
       for (const failure of result.failures) {
-        list.append(el("li", "", `Row ${failure.row}: ${failure.message}`));
+        list.append(el("li", "", `Riga ${failure.row}: ${failure.message}`));
       }
       elements.importResult.append(list);
     }
@@ -850,8 +1012,8 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectName.value = object.name;
     elements.objectDescription.value = object.description;
     elements.objectTags.value = object.tags.join(", ");
-    elements.objectDialogTitle.textContent = "Edit object";
-    elements.objectSave.textContent = "Save changes";
+    elements.objectDialogTitle.textContent = "Modifica oggetto";
+    elements.objectSave.textContent = "Salva modifiche";
     elements.objectPhoto.value = "";
     elements.objectRemovePhoto.checked = false;
     showPhotoPreview(object.image_path);
@@ -872,7 +1034,7 @@ busyDialog: document.getElementById("busy-dialog"),
     state.editingBusyId = id;
     elements.busyForm.reset();
     elements.busyObjectId.value = object.id;
-    elements.busyDialogTitle.textContent = `Mark "${object.name}" busy`;
+    elements.busyDialogTitle.textContent = `Segna "${object.name}" in prestito`;
     const minimum = new Date(Date.now() + 60 * 1000);
     const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
     elements.busyUntil.min = toDateTimeLocal(minimum);
@@ -889,7 +1051,7 @@ busyDialog: document.getElementById("busy-dialog"),
     }
     elements.reserveForm.reset();
     elements.reserveObjectId.value = object.id;
-    elements.reserveDialogTitle.textContent = `Reserve "${object.name}"`;
+    elements.reserveDialogTitle.textContent = `Prenota "${object.name}"`;
     const minimum = new Date(Date.now() + 60 * 1000);
     const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
     elements.reserveFrom.min = toDateTimeLocal(minimum);
@@ -906,7 +1068,7 @@ busyDialog: document.getElementById("busy-dialog"),
     if (!object) {
       return;
     }
-    if (!window.confirm(`Release "${object.name}"?`)) {
+    if (!window.confirm(`Segnare "${object.name}" come restituito?`)) {
       return;
     }
     try {
@@ -914,7 +1076,7 @@ busyDialog: document.getElementById("busy-dialog"),
         method: "PATCH",
         body: { busy: false },
       });
-      showStatus("Object released.", "success");
+      showStatus("Oggetto restituito.", "success");
       await loadObjects();
     } catch (error) {
       handleActionError(error);
@@ -925,8 +1087,8 @@ busyDialog: document.getElementById("busy-dialog"),
     state.editingCategoryId = null;
     elements.categoryForm.reset();
     elements.categoryId.value = "";
-    elements.categoryDialogTitle.textContent = "New category";
-    elements.categorySave.textContent = "Create category";
+    elements.categoryDialogTitle.textContent = "Nuova categoria";
+    elements.categorySave.textContent = "Crea categoria";
     hideFormError(elements.categoryError);
     openDialog(elements.categoryDialog);
     elements.categoryName.focus();
@@ -941,8 +1103,8 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.categoryForm.reset();
     elements.categoryId.value = category.id;
     elements.categoryName.value = category.name;
-    elements.categoryDialogTitle.textContent = "Rename category";
-    elements.categorySave.textContent = "Save changes";
+    elements.categoryDialogTitle.textContent = "Rinomina categoria";
+    elements.categorySave.textContent = "Salva modifiche";
     hideFormError(elements.categoryError);
     openDialog(elements.categoryDialog);
     elements.categoryName.focus();
@@ -953,12 +1115,12 @@ busyDialog: document.getElementById("busy-dialog"),
     if (!object) {
       return;
     }
-    if (!window.confirm(`Delete "${object.name}"?`)) {
+    if (!window.confirm(`Eliminare "${object.name}"?`)) {
       return;
     }
     try {
       await api(`/api/objects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      showStatus("Object deleted.", "success");
+      showStatus("Oggetto eliminato.", "success");
       if (state.objects.length === 1 && state.offset > 0) {
         state.offset = Math.max(0, state.offset - state.limit);
       }
@@ -975,14 +1137,14 @@ busyDialog: document.getElementById("busy-dialog"),
     }
     if (
       !window.confirm(
-        `Delete "${category.name}"? Objects in this category will become uncategorized.`,
+        `Eliminare "${category.name}"? I suoi oggetti resteranno senza categoria.`,
       )
     ) {
       return;
     }
     try {
       await api(`/api/categories/${encodeURIComponent(id)}`, { method: "DELETE" });
-      showStatus("Category deleted. Its objects are now uncategorized.", "success");
+      showStatus("Categoria eliminata. I suoi oggetti sono ora senza categoria.", "success");
       await loadCategories();
       await loadObjects();
     } catch (error) {
@@ -1014,10 +1176,10 @@ busyDialog: document.getElementById("busy-dialog"),
     state.detailIndex = index;
     elements.detailStage.hidden = false;
     elements.detailMainImage.src = urls[index];
-    elements.detailMainImage.alt = `${state.detailName || "Object"} — image ${index + 1} of ${count}`;
+    elements.detailMainImage.alt = `${state.detailName || "Oggetto"}: immagine ${index + 1} di ${count}`;
     elements.detailPrev.disabled = count < 2;
     elements.detailNext.disabled = count < 2;
-    elements.detailCaption.textContent = count > 1 ? `Image ${index + 1} of ${count}` : "";
+    elements.detailCaption.textContent = count > 1 ? `Immagine ${index + 1} di ${count}` : "";
 
     elements.detailThumbs.hidden = count < 2;
     elements.detailThumbs.replaceChildren();
@@ -1038,7 +1200,7 @@ busyDialog: document.getElementById("busy-dialog"),
         thumb.classList.add("is-active");
         thumb.setAttribute("aria-current", "true");
       }
-      thumb.setAttribute("aria-label", `Show image ${position + 1} of ${count}`);
+      thumb.setAttribute("aria-label", `Mostra immagine ${position + 1} di ${count}`);
       elements.detailThumbs.append(thumb);
     });
   }
@@ -1077,9 +1239,9 @@ busyDialog: document.getElementById("busy-dialog"),
     }
     elements.detailTags.hidden = (object.tags || []).length === 0;
 
-    const dates = [`Added ${formatDate(object.created_at)}`];
+    const dates = [`Aggiunto il ${formatDate(object.created_at)}`];
     if (object.updated_at && object.updated_at !== object.created_at) {
-      dates.push(`Updated ${formatDate(object.updated_at)}`);
+      dates.push(`Aggiornato il ${formatDate(object.updated_at)}`);
     }
     elements.detailDates.textContent = dates.join(" · ");
 
@@ -1127,8 +1289,33 @@ busyDialog: document.getElementById("busy-dialog"),
     }
   }
 
+  function showView(name) {
+    if (state.view === name) {
+      return;
+    }
+    const firstRender = state.view === "";
+    state.view = name;
+    for (const view of elements.views) {
+      view.hidden = view.dataset.view !== name;
+    }
+    for (const link of elements.viewLinks) {
+      if (link.dataset.viewLink === name) {
+        link.setAttribute("aria-current", "page");
+      } else {
+        link.removeAttribute("aria-current");
+      }
+    }
+    document.title = name === "catalog"
+      ? "Catalogo · Biblioteca degli Oggetti"
+      : "Biblioteca degli Oggetti";
+    if (!firstRender) {
+      window.scrollTo({ top: 0 });
+    }
+  }
+
   function handleRoute() {
     const id = currentDetailIdFromHash();
+    showView(id || location.hash === "#catalogo" ? "catalog" : "home");
     if (id) {
       if (id !== state.detailObjectId) {
         showDetail(id);
@@ -1153,7 +1340,7 @@ busyDialog: document.getElementById("busy-dialog"),
 
   function clearDetailHash() {
     if (location.hash.startsWith("#object/")) {
-      history.pushState(null, "", `${location.pathname}${location.search}`);
+      history.pushState(null, "", `${location.pathname}${location.search}#catalogo`);
     }
   }
 
@@ -1179,7 +1366,7 @@ busyDialog: document.getElementById("busy-dialog"),
         renderAuth();
         renderCategories();
         renderObjects();
-        showStatus(`Signed in as ${state.user.email}.`, "success");
+        showStatus(`Accesso effettuato come ${state.user.email}.`, "success");
       } catch (error) {
         showFormError(elements.loginError, error.message);
       } finally {
@@ -1199,7 +1386,7 @@ busyDialog: document.getElementById("busy-dialog"),
       renderAuth();
       renderCategories();
       renderObjects();
-      showStatus("Signed out.", "success");
+      showStatus("Disconnesso.", "success");
     });
 
     elements.importButton.addEventListener("click", openImport);
@@ -1213,7 +1400,7 @@ busyDialog: document.getElementById("busy-dialog"),
       elements.importResult.hidden = true;
       const file = elements.importFile.files[0];
       if (!file) {
-        showFormError(elements.importError, "Choose an .xlsx or CSV file.");
+        showFormError(elements.importError, "Scegli un file .xlsx o CSV.");
         return;
       }
       const formData = new FormData();
@@ -1241,7 +1428,7 @@ busyDialog: document.getElementById("busy-dialog"),
       hideFormError(elements.objectError);
       const name = elements.objectName.value.trim();
       if (!name) {
-        showFormError(elements.objectError, "Name is required.");
+        showFormError(elements.objectError, "Il nome è obbligatorio.");
         elements.objectName.focus();
         return;
       }
@@ -1265,11 +1452,11 @@ busyDialog: document.getElementById("busy-dialog"),
             method: "PATCH",
             body: formData,
           });
-          showStatus("Object updated.", "success");
+          showStatus("Oggetto aggiornato.", "success");
         } else {
           const data = await api("/api/objects", { method: "POST", body: formData });
           objectId = data.object.id;
-          showStatus("Object created.", "success");
+          showStatus("Oggetto creato.", "success");
         }
         saved = true;
         if (state.pendingUploads.length > 0) {
@@ -1283,7 +1470,7 @@ busyDialog: document.getElementById("busy-dialog"),
           });
           state.editingObjectImages = data.object.images || [];
           clearPendingUploads();
-          showStatus("Object images uploaded.", "success");
+          showStatus("Immagini caricate.", "success");
         }
         closeDialog(elements.objectDialog);
         await loadObjects();
@@ -1292,8 +1479,8 @@ busyDialog: document.getElementById("busy-dialog"),
           // The object is persisted; keep the dialog open so chosen files are not lost.
           if (objectId !== state.editingObjectId) {
             state.editingObjectId = objectId;
-            elements.objectDialogTitle.textContent = "Edit object";
-            elements.objectSave.textContent = "Save changes";
+            elements.objectDialogTitle.textContent = "Modifica oggetto";
+            elements.objectSave.textContent = "Salva modifiche";
           }
           showFormError(elements.objectError, error.message);
           await loadObjects();
@@ -1311,7 +1498,7 @@ busyDialog: document.getElementById("busy-dialog"),
       const value = elements.busyUntil.value;
       const until = new Date(value);
       if (!value || Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
-        showFormError(elements.busyError, "Choose a time in the future.");
+        showFormError(elements.busyError, "Scegli una data futura.");
         elements.busyUntil.focus();
         return;
       }
@@ -1321,7 +1508,7 @@ busyDialog: document.getElementById("busy-dialog"),
           method: "PATCH",
           body: { busy: true, busy_until: until.toISOString() },
         });
-        showStatus("Object marked busy.", "success");
+        showStatus("Oggetto segnato in prestito.", "success");
         closeDialog(elements.busyDialog);
         state.editingBusyId = null;
         await loadObjects();
@@ -1338,19 +1525,19 @@ busyDialog: document.getElementById("busy-dialog"),
       const fromValue = elements.reserveFrom.value;
       const from = new Date(fromValue);
       if (!fromValue || Number.isNaN(from.getTime()) || from.getTime() <= Date.now()) {
-        showFormError(elements.reserveError, "Choose a reservation start in the future.");
+        showFormError(elements.reserveError, "Scegli un inizio prenotazione futuro.");
         elements.reserveFrom.focus();
         return;
       }
       const untilValue = elements.reserveUntil.value;
       const until = untilValue ? new Date(untilValue) : null;
       if (until && Number.isNaN(until.getTime())) {
-        showFormError(elements.reserveError, "Choose a valid reservation end.");
+        showFormError(elements.reserveError, "Scegli una fine prenotazione valida.");
         elements.reserveUntil.focus();
         return;
       }
       if (until && until.getTime() <= from.getTime()) {
-        showFormError(elements.reserveError, "Reservation end must be after the start.");
+        showFormError(elements.reserveError, "La fine deve essere successiva all'inizio.");
         elements.reserveUntil.focus();
         return;
       }
@@ -1360,7 +1547,7 @@ busyDialog: document.getElementById("busy-dialog"),
           method: "PATCH",
           body: { from: from.toISOString(), until: until ? until.toISOString() : null },
         });
-        showStatus("Object reserved.", "success");
+        showStatus("Oggetto prenotato.", "success");
         closeDialog(elements.reserveDialog);
         await loadObjects();
       } catch (error) {
@@ -1375,7 +1562,7 @@ busyDialog: document.getElementById("busy-dialog"),
       hideFormError(elements.categoryError);
       const name = elements.categoryName.value.trim();
       if (!name) {
-        showFormError(elements.categoryError, "Name is required.");
+        showFormError(elements.categoryError, "Il nome è obbligatorio.");
         elements.categoryName.focus();
         return;
       }
@@ -1386,10 +1573,10 @@ busyDialog: document.getElementById("busy-dialog"),
             method: "PATCH",
             body: { name },
           });
-          showStatus("Category updated.", "success");
+          showStatus("Categoria aggiornata.", "success");
         } else {
           await api("/api/categories", { method: "POST", body: { name } });
-          showStatus("Category created.", "success");
+          showStatus("Categoria creata.", "success");
         }
         closeDialog(elements.categoryDialog);
         await loadCategories();
@@ -1470,7 +1657,7 @@ busyDialog: document.getElementById("busy-dialog"),
       }
       if (file.size > 5 * 1024 * 1024) {
         elements.objectPhoto.value = "";
-        showFormError(elements.objectError, "Photo must be at most 5 MB.");
+        showFormError(elements.objectError, "La foto deve essere al massimo 5 MB.");
         showPhotoPreview(currentObjectImagePath());
         return;
       }
@@ -1503,11 +1690,11 @@ busyDialog: document.getElementById("busy-dialog"),
         kept += 1;
       }
       if (rejectedSize && rejectedCount) {
-        showFormError(elements.objectError, "Up to 10 images per object, each at most 5 MB.");
+        showFormError(elements.objectError, "Massimo 10 immagini per oggetto, ciascuna al massimo 5 MB.");
       } else if (rejectedSize) {
-        showFormError(elements.objectError, "Photo must be at most 5 MB.");
+        showFormError(elements.objectError, "La foto deve essere al massimo 5 MB.");
       } else if (rejectedCount) {
-        showFormError(elements.objectError, "Up to 10 images per object.");
+        showFormError(elements.objectError, "Massimo 10 immagini per oggetto.");
       }
       renderImagesStrip();
     });
@@ -1592,18 +1779,45 @@ busyDialog: document.getElementById("busy-dialog"),
         return;
       }
       if (button.dataset.action === "filter-category") {
-        state.filters.category = button.dataset.name;
-        state.offset = 0;
-        elements.categoryFilter.value = state.filters.category;
-        renderCategories();
-        loadObjects();
-        elements.catalogSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        applyCategoryFilter(button.dataset.name);
       } else if (button.dataset.action === "edit-category") {
         openEditCategory(button.dataset.id);
       } else if (button.dataset.action === "delete-category") {
         deleteCategory(button.dataset.id);
       }
     });
+
+    elements.categoryCards.addEventListener("click", (event) => {
+      const card = event.target.closest(".category-card");
+      if (card) {
+        applyCategoryFilter(card.dataset.name);
+      }
+    });
+
+    elements.activeFilters.addEventListener("click", (event) => {
+      const chip = event.target.closest("button[data-clear]");
+      if (!chip) {
+        return;
+      }
+      const key = chip.dataset.clear;
+      state.filters[key] = "";
+      state.offset = 0;
+      if (key === "q") {
+        elements.searchInput.value = "";
+      } else if (key === "tag") {
+        elements.tagFilter.value = "";
+      } else {
+        elements.categoryFilter.value = "";
+      }
+      renderCategories();
+      loadObjects();
+    });
+
+    for (const button of document.querySelectorAll("[data-scroll-to]")) {
+      button.addEventListener("click", () => {
+        document.getElementById(button.dataset.scrollTo)?.scrollIntoView({ block: "start" });
+      });
+    }
 
     const stepDetailImage = (delta) => {
       const count = state.detailImages.length;
@@ -1650,6 +1864,8 @@ busyDialog: document.getElementById("busy-dialog"),
 
   async function init() {
     bindEvents();
+    // Pick the view before data loads so a #catalogo deep link does not flash the home page.
+    showView(currentDetailIdFromHash() || location.hash === "#catalogo" ? "catalog" : "home");
     await loadSession();
     await Promise.all([loadCategories(), loadObjects()]);
     handleRoute();
