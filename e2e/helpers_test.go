@@ -195,6 +195,17 @@ func (e *env) createObject(body map[string]any) objectDTO {
 	return decode[objectEnvelope](e.t, data).Object
 }
 
+func findObject(t *testing.T, objects []objectDTO, name string) objectDTO {
+	t.Helper()
+	for _, object := range objects {
+		if object.Name == name {
+			return object
+		}
+	}
+	t.Fatalf("object %q not found", name)
+	return objectDTO{}
+}
+
 func assertStatus(t *testing.T, response *http.Response, want int, body []byte) {
 	t.Helper()
 	if response.StatusCode != want {

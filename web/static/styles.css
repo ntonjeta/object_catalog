@@ -1367,8 +1367,7 @@ input[type="file"] {
 }
 
 .photo-preview-wrap,
-.image-strip,
-.import-result {
+.image-strip {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -1553,24 +1552,6 @@ input[type="file"] {
 .detail-dates {
   margin: 0;
   font-size: 13px;
-}
-
-.import-result {
-  display: grid;
-  gap: 8px;
-  font-size: 14px;
-}
-
-.import-failures {
-  max-height: 220px;
-  margin: 0;
-  overflow: auto;
-  padding-left: 20px;
-  color: var(--danger);
-}
-
-.import-failures li {
-  margin-bottom: 4px;
 }
 
 .form-error {

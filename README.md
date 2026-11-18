@@ -14,7 +14,6 @@ HTML/CSS/JavaScript embedded in the binary — no build step, no CDN.
 - Busy ("taken") marking with optional expiry, plus public availability badge
 - Future reservations made by the administrator; the object stays available until the reservation starts
 - Categories with unique, case-insensitive names
-- Bulk import from `.xlsx` or `.csv` with per-row results
 - Session authentication (bcrypt passwords, opaque server-side sessions)
 
 ## Requirements
@@ -73,7 +72,6 @@ Set `COOKIE_SECURE=true` when serving over HTTPS.
 | `GET` | `/api/objects` | public |
 | `GET` | `/api/objects/{id}` | public |
 | `POST` | `/api/objects` | admin |
-| `POST` | `/api/objects/import` | admin |
 | `PATCH` | `/api/objects/{id}` | admin |
 | `PATCH` | `/api/objects/{id}/busy` | admin |
 | `PATCH` | `/api/objects/{id}/reservation` | admin |
@@ -91,7 +89,6 @@ internal/domain/            models, validation, sentinel errors
 internal/usecase/           business logic and outbound ports
 internal/adapter/http/      HTTP adapter, JSON/multipart, auth middleware
 internal/adapter/sqlite/    SQLite repositories and schema migrations
-internal/adapter/spreadsheet/ XLSX and CSV import parsing
 internal/adapter/filestore/ local photo storage
 internal/app/               composition root
 web/                        embedded HTML/CSS/JavaScript

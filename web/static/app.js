@@ -6,7 +6,6 @@
     userArea: document.getElementById("user-area"),
     userEmail: document.getElementById("user-email"),
     logoutButton: document.getElementById("logout-button"),
-    importButton: document.getElementById("import-button"),
     newObjectButton: document.getElementById("new-object-button"),
     searchInput: document.getElementById("search-input"),
     categoryFilter: document.getElementById("category-filter"),
@@ -61,12 +60,6 @@ busyDialog: document.getElementById("busy-dialog"),
     reserveError: document.getElementById("reserve-error"),
     reserveSave: document.getElementById("reserve-save"),
     reservationsList: document.getElementById("reservations-list"),
-    importDialog: document.getElementById("import-dialog"),
-    importForm: document.getElementById("import-form"),
-    importFile: document.getElementById("import-file"),
-    importResult: document.getElementById("import-result"),
-    importError: document.getElementById("import-error"),
-    importSave: document.getElementById("import-save"),
     categoryDialog: document.getElementById("category-dialog"),
     categoryForm: document.getElementById("category-form"),
     categoryDialogTitle: document.getElementById("category-dialog-title"),
@@ -243,7 +236,6 @@ busyDialog: document.getElementById("busy-dialog"),
     closeDialog(elements.busyDialog);
     closeDialog(elements.reserveDialog);
     closeDialog(elements.categoryDialog);
-    closeDialog(elements.importDialog);
     closeDialog(elements.detailDialog);
   }
 
@@ -1005,34 +997,6 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectName.focus();
   }
 
-  function openImport() {
-    elements.importForm.reset();
-    elements.importResult.replaceChildren();
-    elements.importResult.hidden = true;
-    hideFormError(elements.importError);
-    openDialog(elements.importDialog);
-    elements.importFile.focus();
-  }
-
-  function renderImportResult(result) {
-    elements.importResult.replaceChildren();
-        elements.importResult.append(
-      el(
-        "p",
-        "",
-        `Creati ${result.created}, aggiornati ${result.updated}, falliti ${result.failed}.`,
-      ),
-    );
-    if (result.failures.length > 0) {
-      const list = el("ul", "import-failures");
-      for (const failure of result.failures) {
-        list.append(el("li", "", `Riga ${failure.row}: ${failure.message}`));
-      }
-      elements.importResult.append(list);
-    }
-    elements.importResult.hidden = false;
-  }
-
   function openEditObject(id) {
     const object = state.objects.find((item) => item.id === id);
     if (!object) {
@@ -1422,39 +1386,8 @@ busyDialog: document.getElementById("busy-dialog"),
       showStatus("Disconnesso.", "success");
     });
 
-    elements.importButton.addEventListener("click", openImport);
     elements.newObjectButton.addEventListener("click", openNewObject);
     elements.newCategoryButton.addEventListener("click", openNewCategory);
-
-    elements.importForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      hideFormError(elements.importError);
-      elements.importResult.replaceChildren();
-      elements.importResult.hidden = true;
-      const file = elements.importFile.files[0];
-      if (!file) {
-        showFormError(elements.importError, "Scegli un file .xlsx o CSV.");
-        return;
-      }
-      const formData = new FormData();
-      formData.append("file", file);
-      elements.importSave.disabled = true;
-      try {
-        const result = await api("/api/objects/import", {
-          method: "POST",
-          body: formData,
-        });
-        renderImportResult(result);
-        if (result.created > 0 || result.updated > 0) {
-          await loadCategories();
-          await loadObjects();
-        }
-      } catch (error) {
-        handleFormError(error, elements.importError, elements.importDialog);
-      } finally {
-        elements.importSave.disabled = false;
-      }
-    });
 
     elements.objectForm.addEventListener("submit", async (event) => {
       event.preventDefault();

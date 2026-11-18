@@ -99,36 +99,6 @@ starts). Releasing an object clears the reservation immediately.
 - Uploaded files are served with `X-Content-Type-Options: nosniff`; directory
   listings are disabled. SVG and HTML uploads are rejected.
 
-### Spreadsheet import
-
-The administrator can bulk import objects from an `.xlsx` workbook or a `.csv`
-file.
-
-- Upload uses `multipart/form-data` with the field `file`.
-- Only `.xlsx` and `.csv` are accepted. Legacy binary `.xls` files are rejected
-  with instructions to save as `.xlsx` or CSV.
-- The first non-empty row must be a header row. Header names are
-  case-insensitive.
-- Supported columns:
-  - `name` (required; aliases `object`, `object_name`, `title`);
-  - `description` (`desc`, `notes`);
-  - `category` (`category_name`);
-  - `tags` (`tag`), comma-separated;
-  - `photo_url` (`photo`, `photo_path`, `image_url`, `image`).
-- Unknown columns are ignored. Each file is limited to 10 MiB and 5,000 data
-  rows. For `.xlsx`, only the first worksheet is read.
-- Rows are imported independently. Valid rows are committed even when other
-  rows fail. Failures include the original spreadsheet row number.
-- Existing objects are matched by normalized name, case-insensitively. A unique
-  match is updated; otherwise a new object is created. If multiple existing
-  objects share the name, the row fails rather than overwriting one silently.
-- Missing category names are created automatically.
-- Omitted optional columns leave the corresponding fields unchanged on update.
-  Present-but-blank description, tags, and category clear those fields. A blank
-  `photo_url` keeps the existing photo on update. The import never downloads
-  photos; `photo_url` must be an `http(s)` URL or a root-relative path.
-- Uploading a photo and setting `photo_url` are mutually exclusive.
-
 ### Categorization
 
 Categories have unique, case-insensitive names. The administrator can create,
@@ -169,7 +139,6 @@ The embedded frontend provides:
   server still enforces its own 5 MiB limit (`MaxPhotoBytes`).
 - administrator busy marking/release and future reservations, with an availability badge for public
   readers;
-- object import from `.xlsx` or CSV with a per-row result summary;
 - category create/rename/delete.
 
 There is no frontend build step and no external CDN dependency.
@@ -183,7 +152,6 @@ cmd/server/             server and create-admin commands
 internal/domain/        dependency-free models, validation, sentinel errors
 internal/usecase/       business logic and outbound ports
 internal/adapter/http/  HTTP adapter, JSON/multipart handling, auth middleware
-internal/adapter/spreadsheet/ XLSX and CSV import parsing
 internal/adapter/sqlite/ SQLite repositories and schema migrations
 internal/adapter/filestore/ local photo storage
 internal/app/           composition root
@@ -240,7 +208,6 @@ Constraints:
 | `GET` | `/api/objects` | public |
 | `GET` | `/api/objects/{id}` | public |
 | `POST` | `/api/objects` | admin |
-| `POST` | `/api/objects/import` | admin |
 | `PATCH` | `/api/objects/{id}` | admin |
 | `PATCH` | `/api/objects/{id}/busy` | admin |
 | `PATCH` | `/api/objects/{id}/reservation` | admin |
@@ -276,19 +243,9 @@ when the object carries no reservation). A create or update that stores its
 cover reports that cover in `image_path` immediately, but its `images` list is
 authoritative only on subsequent reads: the response of `POST /api/objects` and
 of `PATCH /api/objects/{id}` may carry `images: []` even though the stored file
-is already row 0, so clients refresh the list from `GET`. The import endpoint
-returns per-row outcomes:
+is already row 0, so clients refresh the list from `GET`.
 
-```json
-{
-  "created": 2,
-  "updated": 1,
-  "failed": 1,
-  "failures": [{"row": 4, "message": "object name is required"}]
-}
-```
-
-Import file parsing errors use `invalid_input`. Errors use:
+Errors use:
 
 ```json
 {"error":{"code":"invalid_input","message":"..."}}
@@ -324,8 +281,7 @@ go run ./cmd/server
   unauthorized writes, missing records, pagination, search combinations, photo
 upload/serve/replace/remove/delete, multi-image upload/serve/reorder/remove
   with the per-object cap and cascade file cleanup on object delete, busy
-marking/release/expiry, reservations, CSV/XLSX
-  import, partial import failures, and legacy schema migration.
+  marking/release/expiry, reservations, and legacy schema migration.
 - Third-party services are not used; none need mocks.
 - Frontend static serving is covered by E2E tests. A headless Chromium smoke test
   verifies login, category CRUD, photo upload, thumbnails, search, edit/remove,
@@ -346,7 +302,6 @@ go test -race ./...
 - `modernc.org/sqlite` — pure-Go SQLite driver, no CGO.
 - `golang.org/x/crypto/bcrypt` — password hashing.
 - `golang.org/x/image/webp` — WebP validation.
-- `github.com/xuri/excelize/v2` — XLSX import parsing.
 
 New database adapters can be added behind the use-case repository ports.
 

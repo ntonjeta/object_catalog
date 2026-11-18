@@ -182,7 +182,8 @@
           <p class="muted">Cerca per nome, descrizione, categoria o tag, oppure parti da una categoria.</p>
         </div>
         <div class="hero-actions">
-          <button id="import-button" class="button" type="button" hidden>Importa</button>
+=======
+>>>>>>> 29a2d71 (remove import excel)
           <button id="new-object-button" class="button button-primary" type="button" data-admin-only hidden>Nuovo oggetto</button>
         </div>
       </section>
@@ -408,32 +409,6 @@
     </form>
   </dialog>
 
-  <dialog id="import-dialog" class="dialog" aria-labelledby="import-dialog-title">
-    <form id="import-form" class="dialog-form">
-      <div>
-        <h2 id="import-dialog-title">Importa oggetti</h2>
-        <p class="muted">
-          Carica un file .xlsx o CSV. Colonna obbligatoria: <strong>name</strong>. Colonne facoltative:
-          <strong>description</strong>, <strong>category</strong>, <strong>tags</strong> e
-          <strong>photo_url</strong>.
-        </p>
-      </div>
-      <label class="field">
-        <span>File</span>
-        <input id="import-file" name="file" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
-        <small class="field-hint">Tag separati da virgole. Le categorie mancanti vengono create. I nomi esistenti vengono aggiornati.</small>
-      </label>
-      <div id="import-result" class="import-result" role="status" aria-live="polite" hidden></div>
-      <p id="import-error" class="form-error" role="alert" hidden></p>
-      <div class="dialog-actions">
-        <button class="button button-ghost" type="button" data-close-dialog="import-dialog">Chiudi</button>
-        <button id="import-save" class="button button-primary" type="submit">Importa</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="category-dialog" class="dialog" aria-labelledby="category-dialog-title">
-    <form id="category-form" class="dialog-form">
       <div>
         <h2 id="category-dialog-title">Nuova categoria</h2>
         <p class="muted">I nomi delle categorie sono unici.</p>
