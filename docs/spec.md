@@ -162,6 +162,11 @@ The embedded frontend provides:
 - object create/edit/delete with photo upload/replacement/removal;
 - an image strip in the object dialog: add multiple files, remove individual
   images, and reorder them; card thumbnails keep using the cover;
+- client-side compression of selected images before upload: each image is
+  scaled down (never up) so the longest edge is at most 1600 px and re-encoded
+  as JPEG at quality 0.8 onto a white background, which also flattens alpha.
+  The 5 MiB per-file limit is checked against the compressed result; the
+  server still enforces its own 5 MiB limit (`MaxPhotoBytes`).
 - administrator busy marking/release and future reservations, with an availability badge for public
   readers;
 - object import from `.xlsx` or CSV with a per-row result summary;

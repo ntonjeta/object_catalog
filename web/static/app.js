@@ -112,6 +112,7 @@ busyDialog: document.getElementById("busy-dialog"),
     editingObjectId: null,
     editingObjectImages: [],
     pendingUploads: [],
+    pendingPhoto: null,
     editingBusyId: null,
     editingCategoryId: null,
     detailObjectId: null,
@@ -372,6 +373,36 @@ busyDialog: document.getElementById("busy-dialog"),
       URL.revokeObjectURL(url);
     }
     pendingImageURLs = [];
+  }
+
+  // Client-side compression: cap the longest edge at 1600px (never upscale)
+  // and re-encode as JPEG on white so PNG alpha flattens. Falls back to the
+  // original file when decoding fails or compression does not help.
+  async function compressImage(file) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const longest = Math.max(bitmap.width, bitmap.height);
+      const scaled = longest > 1600;
+      const ratio = scaled ? 1600 / longest : 1;
+      const width = Math.max(1, Math.round(bitmap.width * ratio));
+      const height = Math.max(1, Math.round(bitmap.height * ratio));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(bitmap, 0, 0, width, height);
+      bitmap.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
+      if (!blob || (!scaled && blob.size >= file.size)) {
+        return file;
+      }
+      const name = String(file.name || "immagine").replace(/\.[^.]*$/, "");
+      return new File([blob], name + ".jpg", { type: "image/jpeg" });
+    } catch {
+      return file;
+    }
   }
 
   function clearPendingUploads() {
@@ -963,6 +994,7 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectDialogTitle.textContent = "Nuovo oggetto";
     elements.objectSave.textContent = "Crea oggetto";
     elements.objectPhoto.value = "";
+    state.pendingPhoto = null;
     elements.objectRemovePhoto.checked = false;
     clearPhotoPreview();
     state.editingObjectImages = [];
@@ -1015,6 +1047,7 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectDialogTitle.textContent = "Modifica oggetto";
     elements.objectSave.textContent = "Salva modifiche";
     elements.objectPhoto.value = "";
+    state.pendingPhoto = null;
     elements.objectRemovePhoto.checked = false;
     showPhotoPreview(object.image_path);
     state.editingObjectImages = (object.images || []).slice();
@@ -1437,7 +1470,7 @@ busyDialog: document.getElementById("busy-dialog"),
       formData.append("description", elements.objectDescription.value.trim());
       formData.append("category_id", elements.objectCategory.value);
       formData.append("tags", parseTags(elements.objectTags.value).join(","));
-      const photo = elements.objectPhoto.files[0];
+      const photo = state.pendingPhoto;
       if (photo) {
         formData.append("photo", photo);
       } else if (state.editingObjectId && elements.objectRemovePhoto.checked) {
@@ -1647,37 +1680,42 @@ busyDialog: document.getElementById("busy-dialog"),
       loadObjects();
     });
 
-    elements.objectPhoto.addEventListener("change", () => {
+    elements.objectPhoto.addEventListener("change", async () => {
       hideFormError(elements.objectError);
       const file = elements.objectPhoto.files[0];
       if (!file) {
+        state.pendingPhoto = null;
         elements.objectRemovePhoto.checked = false;
         showPhotoPreview(currentObjectImagePath());
         return;
       }
-      if (file.size > 5 * 1024 * 1024) {
+      const photo = await compressImage(file);
+      if (photo.size > 5 * 1024 * 1024) {
+        state.pendingPhoto = null;
         elements.objectPhoto.value = "";
         showFormError(elements.objectError, "La foto deve essere al massimo 5 MB.");
         showPhotoPreview(currentObjectImagePath());
         return;
       }
+      state.pendingPhoto = photo;
       elements.objectRemovePhoto.checked = false;
-      showPhotoPreview(URL.createObjectURL(file), true);
+      showPhotoPreview(URL.createObjectURL(photo), true);
     });
 
-    elements.objectImages.addEventListener("change", () => {
+    elements.objectImages.addEventListener("change", async () => {
       hideFormError(elements.objectError);
       const files = Array.from(elements.objectImages.files);
       elements.objectImages.value = "";
       if (files.length === 0) {
         return;
       }
+      const compressed = await Promise.all(files.map((file) => compressImage(file)));
       let rejectedSize = false;
       let rejectedCount = false;
       const room = 10 - state.editingObjectImages.length - state.pendingUploads.length;
       let kept = 0;
-      for (const file of files) {
-        if (file.size > 5 * 1024 * 1024) {
+      for (const photo of compressed) {
+        if (photo.size > 5 * 1024 * 1024) {
           rejectedSize = true;
           continue;
         }
@@ -1685,8 +1723,8 @@ busyDialog: document.getElementById("busy-dialog"),
           rejectedCount = true;
           continue;
         }
-        state.pendingUploads.push(file);
-        pendingImageURLs.push(URL.createObjectURL(file));
+        state.pendingUploads.push(photo);
+        pendingImageURLs.push(URL.createObjectURL(photo));
         kept += 1;
       }
       if (rejectedSize && rejectedCount) {
@@ -1716,6 +1754,7 @@ busyDialog: document.getElementById("busy-dialog"),
     elements.objectRemovePhoto.addEventListener("change", () => {
       if (elements.objectRemovePhoto.checked) {
         elements.objectPhoto.value = "";
+        state.pendingPhoto = null;
         if (currentObjectImagePath()) {
           hidePhotoImage();
           elements.objectPhotoPreviewWrap.hidden = false;
