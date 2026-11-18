@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -63,4 +64,32 @@ func TestFrontendIsServed(t *testing.T) {
 		t.Fatalf("unknown API content type = %q, want application/json", contentType)
 	}
 	assertErrorCode(t, data, "not_found")
+}
+
+func TestAppElementIDsResolveInIndex(t *testing.T) {
+	environment := newEnv(t)
+
+	response, index := environment.do(environment.anonymous, http.MethodGet, "/", nil)
+	assertStatus(t, response, http.StatusOK, index)
+	html := string(index)
+
+	for _, marker := range []string{"<<<<<<<", ">>>>>>>"} {
+		if strings.Contains(html, marker) {
+			t.Fatalf("index contains merge conflict marker %q", marker)
+		}
+	}
+	if strings.Contains(html, "\n=======\n") {
+		t.Fatal("index contains merge conflict marker =======")
+	}
+
+	response, script := environment.do(environment.anonymous, http.MethodGet, "/static/app.js", nil)
+	assertStatus(t, response, http.StatusOK, script)
+
+	lookup := regexp.MustCompile(`getElementById\("([^"]+)"\)`)
+	for _, match := range lookup.FindAllStringSubmatch(string(script), -1) {
+		id := match[1]
+		if !strings.Contains(html, `id="`+id+`"`) {
+			t.Errorf("app.js looks up id %q, but index has no such element", id)
+		}
+	}
 }
